@@ -1,4 +1,10 @@
-"""Live OpenRouter call; opt-in when OPENROUTER_API_KEY is set."""
+"""Live OpenRouter (meal LLM / OPENROUTER_MODEL, e.g. gpt-5-mini).
+
+These are **not** USDA tests. They intentionally call `parse_meal_with_llm` over HTTP.
+
+Requires both `OPENROUTER_API_KEY` and explicit opt-in so a normal `pytest` run with `.env`
+loaded does not burn two+ mini calls (e.g. smoke + Hebrew band tests).
+"""
 
 from __future__ import annotations
 
@@ -9,10 +15,14 @@ import pytest
 from app.llm import parse_meal_with_llm
 
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.live_openrouter]
 
-_SKIP = not os.environ.get("OPENROUTER_API_KEY")
-_SKIP_REASON = "Set OPENROUTER_API_KEY to run live OpenRouter integration test"
+_KEY = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
+_OPT_IN = os.environ.get("RUN_LIVE_OPENROUTER", "").lower() in ("1", "true", "yes")
+_SKIP = not _KEY or not _OPT_IN
+_SKIP_REASON = (
+    "Set OPENROUTER_API_KEY and RUN_LIVE_OPENROUTER=1 to run live meal-LLM (mini) integration tests"
+)
 
 # Veal shawarma in laffa with fries — expected plausible band from product / nutrition discussion.
 VEAL_SHAWARMA_LAFFA_FRIES_HE = "שוווארמה עגל בלאפה עם ציפס בפנים"

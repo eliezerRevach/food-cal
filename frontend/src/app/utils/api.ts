@@ -148,18 +148,29 @@ export async function fetchEntryRollups(start: string, end: string): Promise<Ent
 
 export type FoodSuggestResponse = {
   suggestions: string[];
+  usda_enabled: boolean;
+};
+
+export type FoodSuggestResult = {
+  suggestions: string[];
+  usdaEnabled: boolean;
 };
 
 /** USDA FDC search suggestions for meal input; returns [] on error (no throw). */
-export async function fetchFoodSuggestions(q: string, limit = 12): Promise<string[]> {
+export async function fetchFoodSuggestions(q: string, limit = 12): Promise<FoodSuggestResult> {
   const base = getApiBaseUrl();
   const params = new URLSearchParams({ q, limit: String(limit) });
   try {
     const res = await fetch(`${base}/food-suggest?${params}`);
-    if (!res.ok) return [];
+    if (!res.ok) {
+      return { suggestions: [], usdaEnabled: true };
+    }
     const data = (await res.json()) as FoodSuggestResponse;
-    return Array.isArray(data.suggestions) ? data.suggestions : [];
+    return {
+      suggestions: Array.isArray(data.suggestions) ? data.suggestions : [],
+      usdaEnabled: Boolean(data.usda_enabled),
+    };
   } catch {
-    return [];
+    return { suggestions: [], usdaEnabled: true };
   }
 }

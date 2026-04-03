@@ -18,15 +18,17 @@ async def test_food_suggest_returns_suggestions(
 
     r = await client.get("/food-suggest", params={"q": "apple"})
     assert r.status_code == 200, r.text
-    assert r.json() == {
-        "suggestions": ["Apples, raw, with skin", "Apples, raw, red delicious"],
-    }
+    body = r.json()
+    assert body["suggestions"] == ["Apples, raw, with skin", "Apples, raw, red delicious"]
+    assert "usda_enabled" in body
 
 
 async def test_food_suggest_empty_query(client) -> None:
     r = await client.get("/food-suggest", params={"q": ""})
     assert r.status_code == 200, r.text
-    assert r.json() == {"suggestions": []}
+    body = r.json()
+    assert body["suggestions"] == []
+    assert "usda_enabled" in body
 
 
 async def test_food_suggest_q_too_long(client) -> None:

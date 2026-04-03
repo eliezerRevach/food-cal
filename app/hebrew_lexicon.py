@@ -37,6 +37,18 @@ HEBREW_TO_ENGLISH_FOOD_QUERY: dict[str, str] = {
 
 _LATIN = re.compile(r"[A-Za-z]")
 _COUNTED_LATIN_BARE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s+([A-Za-z][A-Za-z\-]*)\s*$")
+# USDA FDC-style one-line descriptions (autocomplete); excludes gram amounts and Hebrew.
+_HEBREW_SCRIPT = re.compile(r"[\u0590-\u05FF]")
+_GRAM_SUFFIX_EN = re.compile(r"\d+(?:\.\d+)?\s*[gG]")
+_GRAM_HE = re.compile(r"גרם")
+# Allowed chars for a Latin FDC description line (commas inside the name).
+_FDC_LATIN_LINE = re.compile(r"^[a-zA-Z][a-zA-Z,\s'\-]*$")
+_FDC_TAIL_SINGLE = re.compile(
+    r"^(raw|cooked|canned|frozen|dried|drained|boiled|baked|peeled|unpared|sliced|cubed|mashed|whole|"
+    r"refried|reheated|smoked|pickled|stewed|grilled|roasted|fried|blanched|parboiled|steamed|microwaved|"
+    r"prepared|unprepared|uncooked|unsweetened|sweetened|unsalted|salted|low\s+fat|reduced\s+fat)$",
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
 def normalize_food_input(text: str) -> str:
@@ -62,6 +74,41 @@ def english_bare_query_name(text: str) -> str | None:
     if len(t) < 2 or " " in t:
         return None
     if not _LATIN.search(t):
+        return None
+    return t.lower()
+
+
+def _fdc_tail_matches_usda_style(last_segment: str) -> bool:
+    """Last comma-separated segment looks like FDC state (not a second food like `rice`)."""
+    tl = last_segment.strip()
+    if not tl:
+        return False
+    low = tl.lower()
+    if low.startswith("with "):
+        return True
+    return _FDC_TAIL_SINGLE.match(tl) is not None
+
+
+def fdc_style_single_food_query(text: str) -> str | None:
+    """Single-line USDA/FDC description (e.g. `Orange, raw`) → lowercase query for lookup; else None.
+
+    Avoids misclassifying casual two-food lists (`chicken, rice`) by requiring a known-style tail segment.
+    """
+    t = normalize_food_input(text)
+    if not t or "," not in t or len(t) > 200:
+        return None
+    if _HEBREW_SCRIPT.search(t) is not None:
+        return None
+    if not _LATIN.search(t):
+        return None
+    if _GRAM_SUFFIX_EN.search(t) is not None or _GRAM_HE.search(t) is not None:
+        return None
+    if _FDC_LATIN_LINE.fullmatch(t) is None:
+        return None
+    parts = [p.strip() for p in t.split(",") if p.strip()]
+    if len(parts) < 2:
+        return None
+    if not _fdc_tail_matches_usda_style(parts[-1]):
         return None
     return t.lower()
 

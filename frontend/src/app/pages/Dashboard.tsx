@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Calendar, PlusCircle, BarChart3, History } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { useNavigate } from 'react-router';
-import { getTodayDate, getOfflineDayLog } from '../utils/foodData';
+import { getTodayDate, getOfflineDayLog, formatLocaleDateMedium } from '../utils/foodData';
 import { fetchEntriesForDate } from '../utils/api';
 
 export default function Dashboard() {
@@ -58,7 +58,7 @@ export default function Dashboard() {
       description: 'See past days',
       icon: History,
       color: 'bg-blue-100 text-blue-700',
-      action: () => navigate(`/day/${today}`),
+      action: () => navigate('/history'),
     },
     {
       title: 'View Summary',
@@ -87,12 +87,7 @@ export default function Dashboard() {
               <Calendar className="size-5" />
               Today's Summary
             </CardTitle>
-            <CardDescription>{new Date().toLocaleDateString('en-US', { 
-              weekday: 'long', 
-              year: 'numeric', 
-              month: 'long', 
-              day: 'numeric' 
-            })}</CardDescription>
+            <CardDescription>{formatLocaleDateMedium(new Date())}</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-3 gap-4">

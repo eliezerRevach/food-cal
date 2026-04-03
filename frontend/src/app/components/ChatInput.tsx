@@ -35,6 +35,7 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
   const [isSending, setIsSending] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [usdaEnabled, setUsdaEnabled] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [focused, setFocused] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -51,9 +52,10 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
     }
     debounceRef.current = setTimeout(() => {
       void (async () => {
-        const list = await fetchFoodSuggestions(q, 12);
+        const { suggestions: list, usdaEnabled: enabled } = await fetchFoodSuggestions(q, 12);
         setSuggestions(list);
-        setSelectedIndex(-1);
+        setUsdaEnabled(enabled);
+        setSelectedIndex(list.length > 0 ? 0 : -1);
       })();
     }, 350);
     return () => {
@@ -102,9 +104,10 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
     }
 
     if (e.key === 'Enter') {
-      if (showList && selectedIndex >= 0 && suggestions[selectedIndex]) {
+      if (showList && suggestions.length > 0) {
         e.preventDefault();
-        applySuggestion(suggestions[selectedIndex]);
+        const idx = selectedIndex >= 0 ? selectedIndex : 0;
+        applySuggestion(suggestions[idx]!);
         return;
       }
       void handleSubmit();
@@ -156,6 +159,12 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
   };
 
   const showDropdown = focused && suggestions.length > 0;
+  const activeQ = activeSearchQuery(input);
+  const showUsdaHint =
+    focused &&
+    Boolean(activeQ) &&
+    !usdaEnabled &&
+    suggestions.length === 0;
 
   return (
     <div className="flex gap-2 items-start w-full">
@@ -200,6 +209,21 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
               </li>
             ))}
           </ul>
+        )}
+        {showUsdaHint && (
+          <p className="text-muted-foreground mt-1.5 text-xs px-0.5">
+            Food hints use USDA FoodData Central. Set <code className="rounded bg-muted px-1">USDA_FDC_API_KEY</code> in
+            your project <code className="rounded bg-muted px-1">.env</code> and restart the API (see{' '}
+            <a
+              className="underline underline-offset-2"
+              href="https://fdc.nal.usda.gov/api-key-signup"
+              target="_blank"
+              rel="noreferrer"
+            >
+              api-key-signup
+            </a>
+            ).
+          </p>
         )}
       </div>
 

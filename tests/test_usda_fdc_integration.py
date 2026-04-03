@@ -66,3 +66,29 @@ async def test_log_meal_bare_banana_no_llm(
     logged = log_r.json()
     assert logged.get("estimate_type") is None
     assert logged["total_calories"] > 0
+
+
+@pytest.mark.skipif(_SKIP, reason=_SKIP_REASON)
+async def test_log_meal_fdc_orange_raw_no_meal_llm_live(
+    client,
+    today_iso: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FDC-style `Orange, raw` with live USDA/OFF — meal LLM (mini) must not run."""
+
+    async def boom_meal_llm(_text: str) -> dict:
+        raise AssertionError(
+            "parse_meal_with_llm (OPENROUTER_MODEL / mini) must not run for FDC Orange, raw with live USDA"
+        )
+
+    monkeypatch.setattr("app.llm.parse_meal_with_llm", boom_meal_llm)
+
+    log_r = await client.post(
+        "/log-meal",
+        json={"text": "Orange, raw", "date": today_iso},
+    )
+    assert log_r.status_code == 200, log_r.text
+    logged = log_r.json()
+    assert logged.get("estimate_type") is None
+    assert logged["total_calories"] > 0
+    assert logged["items"] and logged["items"][0].get("label") == "orange, raw"

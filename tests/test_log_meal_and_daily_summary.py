@@ -9,6 +9,7 @@ import pytest
 
 from app import llm as llm_mod
 from app import db
+from app.food_types import FoodLookupResult
 from tests.conftest import FAKE_SHAWARMA_LLM_RESPONSE
 
 
@@ -198,6 +199,86 @@ async def test_structured_grams_apple_resolves_without_llm(
     logged = log_r.json()
     assert logged.get("estimate_type") is None
     assert logged["total_calories"] == 104.0
+
+
+async def test_fdc_style_usda_line_resolves_without_llm(
+    client,
+    today_iso: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """USDA autocomplete line `Orange, raw` → DB path.
+
+    Must not call `parse_meal_with_llm` (OPENROUTER_MODEL, e.g. gpt-5-mini). Sanity nano
+    (`validate_food_result_with_llm` / LLM_SANITY_MODEL) is disabled in conftest for tests.
+    """
+
+    async def boom_meal_llm(_text: str) -> dict:
+        raise AssertionError(
+            "Meal parse LLM (OPENROUTER_MODEL / mini) must not run for FDC-style USDA description"
+        )
+
+    async def fake_lookup(query: str) -> FoodLookupResult | None:
+        q = query.lower().strip()
+        if q == "orange, raw":
+            return FoodLookupResult(47.0, 0.9, 140.0, "fruit")
+        return None
+
+    async def boom_sanity_llm(*_a, **_kw):
+        raise AssertionError(
+            "validate_food_result_with_llm (nano) must not run; test uses stubbed lookup only"
+        )
+
+    monkeypatch.setattr("app.llm.parse_meal_with_llm", boom_meal_llm)
+    monkeypatch.setattr("app.llm.validate_food_result_with_llm", boom_sanity_llm)
+    monkeypatch.setattr("app.off_foods.lookup_food", fake_lookup)
+
+    log_r = await client.post(
+        "/log-meal",
+        json={"text": "Orange, raw", "date": today_iso},
+    )
+    assert log_r.status_code == 200, log_r.text
+    logged = log_r.json()
+    assert logged.get("estimate_type") is None
+    assert logged["total_calories"] == pytest.approx(65.8, abs=0.05)
+    assert logged["items"][0]["label"] == "orange, raw"
+
+
+async def test_fdc_style_head_fallback_resolves_without_meal_llm(
+    client,
+    today_iso: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Full FDC string missing in lookup → first segment (`orange`) must not trigger meal LLM (mini)."""
+
+    async def boom_meal_llm(_text: str) -> dict:
+        raise AssertionError("Meal parse LLM (mini) must not run when head segment resolves")
+
+    async def fake_lookup(query: str) -> FoodLookupResult | None:
+        q = query.lower().strip()
+        if q == "orange, raw":
+            return None
+        if q == "orange":
+            return FoodLookupResult(47.0, 0.9, 140.0, "fruit")
+        return None
+
+    async def boom_sanity_llm(*_a, **_kw):
+        raise AssertionError(
+            "validate_food_result_with_llm (nano) must not run; test uses stubbed lookup only"
+        )
+
+    monkeypatch.setattr("app.llm.parse_meal_with_llm", boom_meal_llm)
+    monkeypatch.setattr("app.llm.validate_food_result_with_llm", boom_sanity_llm)
+    monkeypatch.setattr("app.off_foods.lookup_food", fake_lookup)
+
+    log_r = await client.post(
+        "/log-meal",
+        json={"text": "Orange, raw", "date": today_iso},
+    )
+    assert log_r.status_code == 200, log_r.text
+    logged = log_r.json()
+    assert logged.get("estimate_type") is None
+    assert logged["total_calories"] == pytest.approx(65.8, abs=0.05)
+    assert logged["items"][0]["label"] == "orange, raw"
 
 
 async def test_hebrew_bare_apple_resolves_without_llm(

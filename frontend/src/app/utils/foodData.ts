@@ -70,7 +70,7 @@ export function parseFoodInput(input: string): Partial<FoodEntry> | null {
 /** Browser-only rows when the API is unreachable (not stored in SQLite). */
 const OFFLINE_STORAGE_KEY = 'food_tracker_offline';
 
-function getOfflineLogs(): Record<string, DayLog> {
+export function getOfflineLogs(): Record<string, DayLog> {
   const data = localStorage.getItem(OFFLINE_STORAGE_KEY);
   return data ? JSON.parse(data) : {};
 }
@@ -120,10 +120,82 @@ export function deleteOfflineFoodEntry(date: string, entryId: string): void {
   saveOfflineDayLog(dayLog);
 }
 
+/** Israel — all "days" and YYYY-MM-DD strings follow this zone. */
+export const APP_TIME_ZONE = 'Asia/Jerusalem';
+
+function ymdInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const y = parts.find((p) => p.type === 'year')?.value;
+  const m = parts.find((p) => p.type === 'month')?.value;
+  const d = parts.find((p) => p.type === 'day')?.value;
+  if (!y || !m || !d) {
+    return date.toISOString().split('T')[0]!;
+  }
+  return `${y}-${m}-${d}`;
+}
+
+/** Calendar date in Israel (YYYY-MM-DD) for a given instant. */
 export function formatDate(date: Date): string {
-  return date.toISOString().split('T')[0];
+  return ymdInTimeZone(date, APP_TIME_ZONE);
 }
 
 export function getTodayDate(): string {
   return formatDate(new Date());
+}
+
+/** Gregorian calendar arithmetic for stored YYYY-MM-DD (same calendar as Israel). */
+export function addCalendarDaysIso(iso: string, deltaDays: number): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) {
+    throw new Error('invalid ISO date');
+  }
+  const y = parseInt(m[1]!, 10);
+  const mo = parseInt(m[2]!, 10);
+  const d = parseInt(m[3]!, 10);
+  const dt = new Date(Date.UTC(y, mo - 1, d + deltaDays));
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+/** Long weekday date line (Israel). */
+export function formatLocaleDateMedium(isoOrDate: string | Date, locales = 'en-US'): string {
+  const inst =
+    typeof isoOrDate === 'string'
+      ? new Date(`${isoOrDate}T12:00:00Z`)
+      : isoOrDate;
+  return inst.toLocaleDateString(locales, {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: APP_TIME_ZONE,
+  });
+}
+
+/** Short label for charts (Israel). */
+export function formatIsoDateShort(iso: string, locales = 'en-US'): string {
+  return new Date(`${iso}T12:00:00Z`).toLocaleDateString(locales, {
+    month: 'short',
+    day: 'numeric',
+    timeZone: APP_TIME_ZONE,
+  });
+}
+
+/** Stable `Date` for a stored calendar day (avoids parsing YYYY-MM-DD as UTC-only edge cases). */
+export function dateFromIsoMiddayUtc(iso: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) {
+    return new Date();
+  }
+  const y = parseInt(m[1]!, 10);
+  const mo = parseInt(m[2]!, 10);
+  const d = parseInt(m[3]!, 10);
+  return new Date(Date.UTC(y, mo - 1, d, 12, 0, 0));
 }

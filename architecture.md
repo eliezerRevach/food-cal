@@ -103,3 +103,19 @@ Example shape (LLM → backend; backend still prefers DB math when items map cle
 ```
 
 **UI:** show something like **“~800 kcal (about 650–950)”** and optionally **“~±19%”** or the short note — enough that users know the number is a **band**, not a measurement.
+
+## Food data sources and bulk import
+
+**Runtime sources (lookup order):** USDA FoodData Central (when `USDA_FDC_API_KEY` is set and not disabled) → Open Food Facts (unless `OPENFOODFACTS_DISABLED`) → `food_baselines` fallback in [`app/off_foods.py`](app/off_foods.py). Successful lookups are cached in SQLite `foods` via [`app/food_resolve.py`](app/food_resolve.py).
+
+**Shipped anchors:** [`app/db.py`](app/db.py) seeds `food_baselines` from `SEED_FOOD_BASELINES` (small curated list). The `foods` table is not pre-filled with a full USDA dump; it grows on demand.
+
+**Bulk tools (offline / maintenance):**
+
+| Tier | Tool | Purpose |
+|------|------|---------|
+| 1 | [`scripts/import_nutrition_seed.py`](scripts/import_nutrition_seed.py) | Import CSV or JSON into `food_baselines` and optionally warm the `foods` cache — no HTTP. See `--help` and [`data/food_seed.example.csv`](data/food_seed.example.csv). |
+| 2 | [`scripts/prefetch_foods_cache.py`](scripts/prefetch_foods_cache.py) | Read query strings (one per line), call `lookup_food` + `resolve_food_row` with rate limiting — needs API keys like the running app. |
+| 3 | USDA / OFF public bulk files | Not implemented in-repo; optional future ETL for very large imports. |
+
+**CSV columns (Tier 1):** `name`, `kcal_per_100g`, `protein_per_100g`, optional `food_category`, optional `default_serving_grams`. Header row required. Names are stored lowercased to match app lookups. You can use full FDC-style lines as `name` (e.g. `Orange, raw`) to pre-seed exact autocomplete strings.

@@ -14,6 +14,8 @@ import {
   parseFoodInput,
   formatDate,
   getTodayDate,
+  formatLocaleDateMedium,
+  dateFromIsoMiddayUtc,
   type FoodEntry,
 } from '../utils/foodData';
 import { logMealToBackend, fetchEntriesForDate, deleteEntryRemote } from '../utils/api';
@@ -22,7 +24,15 @@ import { toast } from 'sonner';
 export default function DailyLog() {
   const { date } = useParams<{ date: string }>();
   const navigate = useNavigate();
-  const [selectedDate, setSelectedDate] = useState<Date>(date ? new Date(date) : new Date());
+  const [selectedDate, setSelectedDate] = useState<Date>(() =>
+    date ? dateFromIsoMiddayUtc(date) : new Date(),
+  );
+
+  useEffect(() => {
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setSelectedDate(dateFromIsoMiddayUtc(date));
+    }
+  }, [date]);
   const [entries, setEntries] = useState<FoodEntry[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -143,14 +153,7 @@ export default function DailyLog() {
             <h1 className="text-2xl font-bold">
               {isToday ? "Today's Log" : 'Daily Log'}
             </h1>
-            <p className="text-sm text-muted-foreground">
-              {selectedDate.toLocaleDateString('en-US', {
-                weekday: 'long',
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-              })}
-            </p>
+            <p className="text-sm text-muted-foreground">{formatLocaleDateMedium(selectedDate)}</p>
           </div>
 
           <Popover>

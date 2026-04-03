@@ -19,6 +19,7 @@ SEED_FOOD_BASELINES: list[tuple[str, float, float, str | None, float | None]] = 
     ("cucumber", 16.0, 0.7, "vegetable", 200.0),
     ("egg", 143.0, 12.6, "protein", 50.0),
     ("milk", 42.0, 3.4, "dairy", None),
+    ("orange", 47.0, 0.9, "fruit", 140.0),
     ("oats", 389.0, 17.0, "grain", None),
     ("pasta", 131.0, 5.0, "grain", None),
     ("potato", 77.0, 2.0, "vegetable", 173.0),

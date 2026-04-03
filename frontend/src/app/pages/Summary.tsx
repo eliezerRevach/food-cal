@@ -4,7 +4,7 @@ import { ArrowLeft, TrendingUp, Calendar } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { formatDate } from '../utils/foodData';
+import { getTodayDate, addCalendarDaysIso, formatIsoDateShort } from '../utils/foodData';
 import { fetchEntryRollups } from '../utils/api';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -25,23 +25,18 @@ export default function Summary() {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const today = new Date();
       const days = timeRange === 'week' ? 7 : 30;
-      const end = formatDate(today);
-      const startDate = new Date(today);
-      startDate.setDate(startDate.getDate() - (days - 1));
-      const start = formatDate(startDate);
+      const end = getTodayDate();
+      const start = addCalendarDaysIso(end, -(days - 1));
       try {
         const { days: rollups } = await fetchEntryRollups(start, end);
         const byDate = new Map(rollups.map((d) => [d.date, d]));
         const data: ChartDay[] = [];
         for (let i = days - 1; i >= 0; i--) {
-          const date = new Date(today);
-          date.setDate(date.getDate() - i);
-          const dateString = formatDate(date);
+          const dateString = addCalendarDaysIso(end, -i);
           const r = byDate.get(dateString);
           data.push({
-            date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+            date: formatIsoDateShort(dateString),
             fullDate: dateString,
             calories: r?.total_calories ?? 0,
             protein: r?.total_protein_g ?? 0,

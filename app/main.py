@@ -18,7 +18,7 @@ from pydantic import BaseModel, field_validator
 
 from app import db
 from app.debug_agent_log import agent_log
-from app.usda_fdc import search_food_names_usda
+from app.usda_fdc import search_food_names_usda, usda_fdc_suggest_enabled
 from app.meals import (
     daily_summary,
     delete_entry,
@@ -72,6 +72,7 @@ async def root() -> dict[str, str]:
 
 class FoodSuggestResponse(BaseModel):
     suggestions: list[str]
+    usda_enabled: bool
 
 
 @app.get("/food-suggest")
@@ -82,10 +83,11 @@ async def get_food_suggest(q: str = "", limit: int = 12) -> FoodSuggestResponse:
         raise HTTPException(status_code=400, detail="q must be at most 120 characters")
     if limit < 1 or limit > 25:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 25")
+    enabled = usda_fdc_suggest_enabled()
     if not q:
-        return FoodSuggestResponse(suggestions=[])
+        return FoodSuggestResponse(suggestions=[], usda_enabled=enabled)
     suggestions = await search_food_names_usda(q, page_size=limit)
-    return FoodSuggestResponse(suggestions=suggestions)
+    return FoodSuggestResponse(suggestions=suggestions, usda_enabled=enabled)
 
 
 app.add_middleware(

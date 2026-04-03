@@ -1,7 +1,7 @@
 import { Trash2, Apple } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
-import { FoodEntry as FoodEntryType } from '../utils/foodData';
+import { FoodEntry as FoodEntryType, APP_TIME_ZONE } from '../utils/foodData';
 
 interface FoodEntryProps {
   entry: FoodEntryType;
@@ -12,6 +12,7 @@ export function FoodEntry({ entry, onDelete }: FoodEntryProps) {
   const time = new Date(entry.timestamp).toLocaleTimeString('en-US', {
     hour: 'numeric',
     minute: '2-digit',
+    timeZone: APP_TIME_ZONE,
   });
 
   return (

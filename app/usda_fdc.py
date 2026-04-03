@@ -221,13 +221,21 @@ def _fdc_coarse_category(food: dict[str, Any]) -> str | None:
     return None
 
 
-async def search_food_names_usda(query: str, *, page_size: int = 12) -> list[str]:
-    """USDA FDC search only — descriptions from `foods/search`, no per-food GET (for autocomplete)."""
+def usda_fdc_suggest_enabled() -> bool:
+    """True when FDC autocomplete/search can run (same guards as `search_food_names_usda`)."""
     api_key = (os.environ.get("USDA_FDC_API_KEY") or "").strip()
     if not api_key:
-        return []
+        return False
     if os.environ.get("USDA_FDC_DISABLED", "").lower() in ("1", "true", "yes"):
+        return False
+    return True
+
+
+async def search_food_names_usda(query: str, *, page_size: int = 12) -> list[str]:
+    """USDA FDC search only — descriptions from `foods/search`, no per-food GET (for autocomplete)."""
+    if not usda_fdc_suggest_enabled():
         return []
+    api_key = (os.environ.get("USDA_FDC_API_KEY") or "").strip()
 
     q = query.strip()
     if not q:

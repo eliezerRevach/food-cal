@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import app.llm as llm_mod
@@ -16,6 +16,7 @@ from app.hebrew_lexicon import (
     english_bare_query_name,
     english_counted_bare_query,
     english_food_query_for_hebrew_bare,
+    fdc_style_single_food_query,
 )
 from app.nutrition import kcal_and_protein
 from app.debug_agent_log import agent_log
@@ -38,9 +39,10 @@ def validate_date_iso(date_iso: str) -> str:
 def _parse_created_at_to_ms(created_at: str | None, entry_id: int) -> int:
     if not created_at:
         return entry_id * 1_000_000
+    s = created_at.strip()
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
         try:
-            dt = datetime.strptime(created_at.strip(), fmt)
+            dt = datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
             return int(dt.timestamp() * 1000)
         except ValueError:
             continue
@@ -247,6 +249,24 @@ async def log_meal(text: str, date_iso: str) -> dict[str, Any]:
                     continue
                 counted_resolved = [(grams_bare * count, candidate, row)]
                 return _persist_structured_entry(conn, date_iso, text, counted_resolved)
+        fdc_q = fdc_style_single_food_query(text)
+        if fdc_q is not None:
+            row = await resolve_food_row(conn, fdc_q)
+            serving_name = fdc_q
+            if row is None:
+                # USDA/OFF search often matches the first segment (e.g. `orange`) when the full
+                # FDC description fails — avoids falling through to meal LLM (OPENROUTER_MODEL / mini).
+                head = fdc_q.split(",", 1)[0].strip()
+                if head:
+                    row = await resolve_food_row(conn, head)
+                    serving_name = head
+            if row is not None:
+                # `food_baselines` keys are simple names (e.g. `orange`), not full FDC lines (`orange, raw`).
+                baseline_name = fdc_q.split(",", 1)[0].strip() if "," in fdc_q else fdc_q
+                grams_bare = _bare_serving_with_baseline(conn, baseline_name, row)
+                if grams_bare is not None:
+                    fdc_resolved = [(grams_bare, fdc_q, row)]
+                    return _persist_structured_entry(conn, date_iso, text, fdc_resolved)
 
     # region agent log
     agent_log("meals.py:log_meal", "calling_llm", {"text_len": len(text)}, "H2")
