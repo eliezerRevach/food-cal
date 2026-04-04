@@ -1,7 +1,8 @@
 /** Browser-local saved manual entry presets (not synced to the server). */
 
 const STORAGE_KEY = 'foodcal-manual-presets';
-const MAX_PRESETS = 100;
+/** Max presets stored and max rows shown in browse-all dropdown. */
+export const MAX_PRESETS = 100;
 
 export type ManualFoodPreset = {
   id: string;
@@ -58,6 +59,13 @@ export function matchManualPresets(q: string, limit: number): ManualFoodPreset[]
     .filter((p) => p.name.toLowerCase().includes(needle))
     .sort((a, b) => b.savedAt - a.savedAt);
   return list.slice(0, Math.max(0, limit));
+}
+
+/** All saved presets (newest first), for browse-on-focus UI. */
+export function listAllManualPresets(limit: number): ManualFoodPreset[] {
+  return readRaw()
+    .sort((a, b) => b.savedAt - a.savedAt)
+    .slice(0, Math.max(0, limit));
 }
 
 export type SavePresetResult = { ok: true; updated: boolean } | { ok: false; reason: 'invalid' };

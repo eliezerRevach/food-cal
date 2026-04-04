@@ -5,7 +5,13 @@ import { Input } from './ui/input';
 import { toast } from 'sonner';
 import { fetchFoodSuggestions } from '../utils/api';
 import { activeSearchQuery, replaceActiveToken } from '../utils/foodNameQuery';
-import { deleteManualPreset, matchManualPresets, type ManualFoodPreset } from '../utils/manualPresets';
+import {
+  deleteManualPreset,
+  listAllManualPresets,
+  matchManualPresets,
+  MAX_PRESETS,
+  type ManualFoodPreset,
+} from '../utils/manualPresets';
 
 interface ChatInputProps {
   onSubmit: (text: string) => void | Promise<void>;
@@ -37,14 +43,26 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
   }, [presetSuggestions, usdaSuggestions]);
 
   useEffect(() => {
-    const q = activeSearchQuery(input);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (!q) {
+
+    if (!focused) {
       setPresetSuggestions([]);
       setUsdaSuggestions([]);
       setSelectedIndex(-1);
       return;
     }
+
+    const q = activeSearchQuery(input);
+
+    if (q === null) {
+      const all = listAllManualPresets(MAX_PRESETS);
+      setPresetSuggestions(all);
+      setUsdaSuggestions([]);
+      setUsdaEnabled(true);
+      setSelectedIndex(all.length > 0 ? 0 : -1);
+      return;
+    }
+
     debounceRef.current = setTimeout(() => {
       void (async () => {
         const presets = matchManualPresets(q, 6);
@@ -59,7 +77,7 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [input]);
+  }, [input, focused]);
 
   useEffect(() => {
     return () => {
@@ -78,12 +96,19 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
 
   const removePreset = (id: string) => {
     if (!deleteManualPreset(id)) return;
-    setPresetSuggestions((prev) => {
-      const next = prev.filter((p) => p.id !== id);
-      const total = next.length + usdaSuggestions.length;
-      setSelectedIndex(total > 0 ? 0 : -1);
-      return next;
-    });
+    const q = activeSearchQuery(input);
+    if (q === null) {
+      const all = listAllManualPresets(MAX_PRESETS);
+      setPresetSuggestions(all);
+      setSelectedIndex(all.length > 0 ? 0 : -1);
+    } else {
+      setPresetSuggestions((prev) => {
+        const next = prev.filter((p) => p.id !== id);
+        const total = next.length + usdaSuggestions.length;
+        setSelectedIndex(total > 0 ? 0 : -1);
+        return next;
+      });
+    }
     toast.success('Removed from saved list');
   };
 

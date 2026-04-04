@@ -8,7 +8,9 @@ import { fetchFoodSuggestions } from '../utils/api';
 import { activeSearchQuery, replaceActiveToken } from '../utils/foodNameQuery';
 import {
   deleteManualPreset,
+  listAllManualPresets,
   matchManualPresets,
+  MAX_PRESETS,
   saveManualPreset,
   type ManualFoodPreset,
 } from '../utils/manualPresets';
@@ -51,14 +53,26 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
   }, [presetSuggestions, usdaSuggestions]);
 
   useEffect(() => {
-    const q = activeSearchQuery(formData.name);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (!q) {
+
+    if (!nameFocused) {
       setPresetSuggestions([]);
       setUsdaSuggestions([]);
       setSelectedIndex(-1);
       return;
     }
+
+    const q = activeSearchQuery(formData.name);
+
+    if (q === null) {
+      const all = listAllManualPresets(MAX_PRESETS);
+      setPresetSuggestions(all);
+      setUsdaSuggestions([]);
+      setUsdaEnabled(true);
+      setSelectedIndex(all.length > 0 ? 0 : -1);
+      return;
+    }
+
     debounceRef.current = setTimeout(() => {
       void (async () => {
         const presets = matchManualPresets(q, 6);
@@ -73,7 +87,7 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [formData.name]);
+  }, [formData.name, nameFocused]);
 
   const clearSuggestions = () => {
     setPresetSuggestions([]);
@@ -98,12 +112,19 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
 
   const removePreset = (id: string) => {
     if (!deleteManualPreset(id)) return;
-    setPresetSuggestions((prev) => {
-      const next = prev.filter((p) => p.id !== id);
-      const total = next.length + usdaSuggestions.length;
-      setSelectedIndex(total > 0 ? 0 : -1);
-      return next;
-    });
+    const q = activeSearchQuery(formData.name);
+    if (q === null) {
+      const all = listAllManualPresets(MAX_PRESETS);
+      setPresetSuggestions(all);
+      setSelectedIndex(all.length > 0 ? 0 : -1);
+    } else {
+      setPresetSuggestions((prev) => {
+        const next = prev.filter((p) => p.id !== id);
+        const total = next.length + usdaSuggestions.length;
+        setSelectedIndex(total > 0 ? 0 : -1);
+        return next;
+      });
+    }
     toast.success('Removed from saved list');
   };
 
