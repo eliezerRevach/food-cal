@@ -1,8 +1,19 @@
-import { useState, type KeyboardEvent } from 'react';
-import { Plus } from 'lucide-react';
+import { useState, useRef, useEffect, useMemo, type KeyboardEvent } from 'react';
+import { Plus, Save, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
+import { fetchFoodSuggestions } from '../utils/api';
+import { activeSearchQuery, replaceActiveToken } from '../utils/foodNameQuery';
+import {
+  deleteManualPreset,
+  listAllManualPresets,
+  matchManualPresets,
+  MAX_PRESETS,
+  saveManualPreset,
+  type ManualFoodPreset,
+} from '../utils/manualPresets';
 
 export type ManualFoodFormData = {
   name: string;
@@ -15,6 +26,10 @@ interface ManualFoodInputProps {
   onSubmit: (data: ManualFoodFormData) => void;
 }
 
+type SuggestionRow =
+  | { type: 'preset'; preset: ManualFoodPreset }
+  | { type: 'usda'; name: string };
+
 export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
   const [formData, setFormData] = useState({
     name: '',
@@ -22,6 +37,96 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
     protein: '',
     calories: '',
   });
+
+  const [presetSuggestions, setPresetSuggestions] = useState<ManualFoodPreset[]>([]);
+  const [usdaSuggestions, setUsdaSuggestions] = useState<string[]>([]);
+  const [usdaEnabled, setUsdaEnabled] = useState(true);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [nameFocused, setNameFocused] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const blurCloseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const suggestionRows = useMemo((): SuggestionRow[] => {
+    const presetRows: SuggestionRow[] = presetSuggestions.map((p) => ({ type: 'preset', preset: p }));
+    const usdaRows: SuggestionRow[] = usdaSuggestions.map((name) => ({ type: 'usda', name }));
+    return [...presetRows, ...usdaRows];
+  }, [presetSuggestions, usdaSuggestions]);
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    if (!nameFocused) {
+      setPresetSuggestions([]);
+      setUsdaSuggestions([]);
+      setSelectedIndex(-1);
+      return;
+    }
+
+    const q = activeSearchQuery(formData.name);
+
+    if (q === null) {
+      const all = listAllManualPresets(MAX_PRESETS);
+      setPresetSuggestions(all);
+      setUsdaSuggestions([]);
+      setUsdaEnabled(true);
+      setSelectedIndex(all.length > 0 ? 0 : -1);
+      return;
+    }
+
+    debounceRef.current = setTimeout(() => {
+      void (async () => {
+        const presets = matchManualPresets(q, 6);
+        setPresetSuggestions(presets);
+        const { suggestions: list, usdaEnabled: enabled } = await fetchFoodSuggestions(q, 6);
+        setUsdaSuggestions(list);
+        setUsdaEnabled(enabled);
+        const total = presets.length + list.length;
+        setSelectedIndex(total > 0 ? 0 : -1);
+      })();
+    }, 350);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [formData.name, nameFocused]);
+
+  const clearSuggestions = () => {
+    setPresetSuggestions([]);
+    setUsdaSuggestions([]);
+    setSelectedIndex(-1);
+  };
+
+  const applySuggestionRow = (row: SuggestionRow) => {
+    if (row.type === 'preset') {
+      const p = row.preset;
+      setFormData({
+        name: p.name,
+        grams: String(p.grams),
+        protein: String(p.protein),
+        calories: String(p.calories),
+      });
+    } else {
+      setFormData((prev) => ({ ...prev, name: replaceActiveToken(prev.name, row.name) }));
+    }
+    clearSuggestions();
+  };
+
+  const removePreset = (id: string) => {
+    if (!deleteManualPreset(id)) return;
+    const q = activeSearchQuery(formData.name);
+    if (q === null) {
+      const all = listAllManualPresets(MAX_PRESETS);
+      setPresetSuggestions(all);
+      setSelectedIndex(all.length > 0 ? 0 : -1);
+    } else {
+      setPresetSuggestions((prev) => {
+        const next = prev.filter((p) => p.id !== id);
+        const total = next.length + usdaSuggestions.length;
+        setSelectedIndex(total > 0 ? 0 : -1);
+        return next;
+      });
+    }
+    toast.success('Removed from saved list');
+  };
 
   const handleSubmit = () => {
     if (formData.name && formData.grams && formData.protein && formData.calories) {
@@ -37,10 +142,69 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
         protein: '',
         calories: '',
       });
+      clearSuggestions();
     }
   };
 
-  const handleKeyDown = (e: KeyboardEvent) => {
+  const handleSavePreset = () => {
+    if (!formData.name || !formData.grams || !formData.protein || !formData.calories) return;
+    const grams = parseFloat(formData.grams);
+    const protein = parseFloat(formData.protein);
+    const calories = parseFloat(formData.calories);
+    if (Number.isNaN(grams) || Number.isNaN(protein) || Number.isNaN(calories)) {
+      toast.error('Enter valid numbers for weight, calories, and protein.');
+      return;
+    }
+    const result = saveManualPreset({
+      name: formData.name,
+      grams,
+      protein,
+      calories,
+    });
+    if (!result.ok) {
+      toast.error('Could not save preset.');
+      return;
+    }
+    toast.success(result.updated ? 'Saved preset updated.' : 'Saved for reuse in this browser.');
+  };
+
+  const showNameDropdown = nameFocused && suggestionRows.length > 0;
+  const activeQ = activeSearchQuery(formData.name);
+  const showUsdaHint =
+    nameFocused && Boolean(activeQ) && !usdaEnabled && suggestionRows.length === 0;
+
+  const handleNameKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    const showList = showNameDropdown;
+
+    if (e.key === 'Escape' && showList) {
+      e.preventDefault();
+      clearSuggestions();
+      return;
+    }
+
+    if (showList && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault();
+      if (e.key === 'ArrowDown') {
+        setSelectedIndex((i) => (i < suggestionRows.length - 1 ? i + 1 : i));
+      } else {
+        setSelectedIndex((i) => (i > 0 ? i - 1 : -1));
+      }
+      return;
+    }
+
+    if (e.key === 'Enter') {
+      if (showList && suggestionRows.length > 0) {
+        e.preventDefault();
+        const idx = selectedIndex >= 0 ? selectedIndex : 0;
+        const row = suggestionRows[idx];
+        if (row) applySuggestionRow(row);
+        return;
+      }
+      handleSubmit();
+    }
+  };
+
+  const handleOtherKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Enter') {
       handleSubmit();
     }
@@ -53,7 +217,7 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <div className="md:col-span-2">
+        <div className="relative md:col-span-2">
           <Label htmlFor="food-name" className="mb-1.5 block text-sm font-medium">
             Food Name
           </Label>
@@ -62,9 +226,92 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
             placeholder="e.g., Grilled Chicken Breast"
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            onKeyDown={handleKeyDown}
+            onKeyDown={handleNameKeyDown}
+            onFocus={() => {
+              if (blurCloseRef.current) {
+                clearTimeout(blurCloseRef.current);
+                blurCloseRef.current = null;
+              }
+              setNameFocused(true);
+            }}
+            onBlur={() => {
+              blurCloseRef.current = setTimeout(() => setNameFocused(false), 150);
+            }}
             className="h-11"
+            autoComplete="off"
+            aria-autocomplete="list"
+            aria-expanded={showNameDropdown}
           />
+          {showNameDropdown && (
+            <ul
+              className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md border border-border bg-popover text-popover-foreground shadow-md"
+              role="listbox"
+            >
+              {suggestionRows.map((row, idx) =>
+                row.type === 'preset' ? (
+                  <li
+                    key={`p-${row.preset.id}`}
+                    className="flex items-stretch"
+                    role="option"
+                    aria-selected={selectedIndex === idx}
+                  >
+                    <button
+                      type="button"
+                      className={`min-w-0 flex-1 cursor-pointer px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground ${
+                        selectedIndex === idx ? 'bg-accent text-accent-foreground' : ''
+                      }`}
+                      onMouseDown={(ev) => ev.preventDefault()}
+                      onClick={() => applySuggestionRow(row)}
+                    >
+                      <div className="font-medium">{row.preset.name}</div>
+                      <div className="text-muted-foreground text-xs">
+                        Saved · {row.preset.calories} kcal · {row.preset.grams}g · P {row.preset.protein}g
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Remove from saved list"
+                      className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive shrink-0 px-2.5"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        removePreset(row.preset.id);
+                      }}
+                    >
+                      <X className="size-4" />
+                    </button>
+                  </li>
+                ) : (
+                  <li
+                    key={`u-${row.name}-${idx}`}
+                    role="option"
+                    aria-selected={selectedIndex === idx}
+                  >
+                    <button
+                      type="button"
+                      className={`w-full cursor-pointer px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground ${
+                        selectedIndex === idx ? 'bg-accent text-accent-foreground' : ''
+                      }`}
+                      onMouseDown={(ev) => ev.preventDefault()}
+                      onClick={() => applySuggestionRow(row)}
+                    >
+                      {row.name}
+                    </button>
+                  </li>
+                ),
+              )}
+            </ul>
+          )}
+          {showUsdaHint && (
+            <p className="text-muted-foreground mt-1.5 text-xs px-0.5">
+              Food hints use USDA FoodData Central. Set <code className="rounded bg-muted px-1">USDA_FDC_API_KEY</code>{' '}
+              in your project <code className="rounded bg-muted px-1">.env</code> and restart the API.
+            </p>
+          )}
         </div>
 
         <div>
@@ -77,7 +324,7 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
             placeholder="150"
             value={formData.grams}
             onChange={(e) => setFormData({ ...formData, grams: e.target.value })}
-            onKeyDown={handleKeyDown}
+            onKeyDown={handleOtherKeyDown}
             className="h-11"
             min={0}
             step={0.1}
@@ -94,7 +341,7 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
             placeholder="165"
             value={formData.calories}
             onChange={(e) => setFormData({ ...formData, calories: e.target.value })}
-            onKeyDown={handleKeyDown}
+            onKeyDown={handleOtherKeyDown}
             className="h-11"
             min={0}
             step={1}
@@ -111,7 +358,7 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
             placeholder="31"
             value={formData.protein}
             onChange={(e) => setFormData({ ...formData, protein: e.target.value })}
-            onKeyDown={handleKeyDown}
+            onKeyDown={handleOtherKeyDown}
             className="h-11"
             min={0}
             step={0.1}
@@ -119,10 +366,23 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
         </div>
       </div>
 
-      <Button onClick={handleSubmit} disabled={!isValid} className="h-11 w-full" size="lg">
-        <Plus className="mr-2 size-4" />
-        Add Food Entry
-      </Button>
+      <div className="flex flex-col gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={handleSavePreset}
+          disabled={!isValid}
+          className="h-12 w-full justify-center gap-2"
+          size="lg"
+        >
+          <Save className="size-4 shrink-0" />
+          Save to List
+        </Button>
+        <Button onClick={handleSubmit} disabled={!isValid} className="h-11 w-full" size="lg">
+          <Plus className="mr-2 size-4" />
+          Add Food Entry
+        </Button>
+      </div>
     </div>
   );
 }
