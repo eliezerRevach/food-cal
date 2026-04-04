@@ -38,7 +38,8 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
   const [usdaEnabled, setUsdaEnabled] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [focused, setFocused] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const speechRecognitionRef = useRef<WebSpeechRecognition | null>(null);
+  const inputPrefixRef = useRef('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blurCloseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -62,6 +63,13 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [input]);
+
+  useEffect(() => {
+    return () => {
+      speechRecognitionRef.current?.abort();
+      speechRecognitionRef.current = null;
+    };
+  }, []);
 
   const applySuggestion = (text: string) => {
     setInput(replaceActiveToken(input, text));
@@ -114,47 +122,59 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
     }
   };
 
-  const startRecording = async () => {
+  const startRecording = () => {
+    const Ctor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    if (!Ctor) {
+      toast.error('Speech recognition is not supported in this browser. Try Chrome or Edge.');
+      return;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
+      inputPrefixRef.current = input.trimEnd();
+      const rec = new Ctor();
+      speechRecognitionRef.current = rec;
+      rec.lang = navigator.language || 'en-US';
+      rec.continuous = true;
+      rec.interimResults = true;
 
-      const audioChunks: Blob[] = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        audioChunks.push(event.data);
+      rec.onresult = (event: WebSpeechRecognitionResultEvent) => {
+        let line = '';
+        for (let i = 0; i < event.results.length; i++) {
+          line += event.results[i]![0]!.transcript;
+        }
+        const spoken = line.trim();
+        const prefix = inputPrefixRef.current;
+        setInput(prefix ? `${prefix} ${spoken}` : spoken);
       };
 
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-        stream.getTracks().forEach((track) => track.stop());
-
-        toast.info('Voice recording captured! In production, this would convert speech to text.');
-
-        const mockTranscriptions = [
-          'I had chicken breast and rice',
-          'I ate a banana',
-          'Had oatmeal for breakfast',
-          'Lunch was a salad with salmon',
-        ];
-        const mockText = mockTranscriptions[Math.floor(Math.random() * mockTranscriptions.length)];
-        setInput(mockText);
+      rec.onerror = (event: WebSpeechRecognitionErrorEvent) => {
+        if (event.error === 'aborted') return;
+        if (event.error === 'no-speech') return;
+        if (event.error === 'not-allowed') {
+          toast.error('Allow microphone access to use voice input.');
+        } else {
+          toast.error(`Speech recognition: ${event.error}`);
+        }
       };
 
-      mediaRecorder.start();
+      rec.onend = () => {
+        speechRecognitionRef.current = null;
+        setIsRecording(false);
+      };
+
+      rec.start();
       setIsRecording(true);
-      toast.success('Recording started...');
+      toast.success('Listening… click the mic again to stop.');
     } catch (error) {
-      toast.error('Could not access microphone. Please check permissions.');
-      console.error('Error accessing microphone:', error);
+      toast.error('Could not start speech recognition.');
+      console.error(error);
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
+    const rec = speechRecognitionRef.current;
+    if (rec && isRecording) {
+      rec.stop();
     }
   };
 
