@@ -72,6 +72,8 @@ export default function DailyLog() {
           calories: e.calories,
           protein: e.protein,
           timestamp: e.timestamp,
+          gramsTotal: e.grams_total ?? null,
+          gramsPartial: e.grams_partial ?? false,
         }));
         if (!cancelled) {
           setEntries([...merged, ...offline].sort((a, b) => b.timestamp - a.timestamp));

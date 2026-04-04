@@ -5,6 +5,9 @@ export interface FoodEntry {
   calories: number;
   protein: number;
   timestamp: number;
+  /** From API: total grams when known; undefined for offline-only rows. */
+  gramsTotal?: number | null;
+  gramsPartial?: boolean;
 }
 
 export interface DayLog {

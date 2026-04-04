@@ -145,6 +145,10 @@ export type ApiEntryRow = {
   calories: number;
   protein: number;
   timestamp: number;
+  /** Sum of non-null line-item grams; omitted or null if every item has no grams. */
+  grams_total?: number | null;
+  /** True when some items have grams and some do not (total is incomplete). */
+  grams_partial?: boolean;
 };
 
 export type EntriesResponse = {
