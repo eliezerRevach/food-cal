@@ -1,11 +1,15 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { ArrowLeft, Calendar as CalendarIcon, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Calendar as CalendarIcon, Edit3, MessageSquare, Sparkles } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Calendar } from '../components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
+import { Label } from '../components/ui/label';
+import { Switch } from '../components/ui/switch';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { ChatInput } from '../components/ChatInput';
+import { ManualFoodInput, type ManualFoodFormData } from '../components/ManualFoodInput';
 import { FoodEntry as FoodEntryCard } from '../components/FoodEntry';
 import {
   getOfflineDayLog,
@@ -18,7 +22,15 @@ import {
   dateFromIsoMiddayUtc,
   type FoodEntry,
 } from '../utils/foodData';
-import { logMealToBackend, fetchEntriesForDate, deleteEntryRemote } from '../utils/api';
+import {
+  logMealToBackend,
+  logManualMealToBackend,
+  fetchEntriesForDate,
+  deleteEntryRemote,
+  ApiError,
+  readLlmFallbackPreference,
+  writeLlmFallbackPreference,
+} from '../utils/api';
 import { toast } from 'sonner';
 
 export default function DailyLog() {
@@ -37,6 +49,8 @@ export default function DailyLog() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [showChat, setShowChat] = useState(false);
+  const [inputMode, setInputMode] = useState<'chat' | 'manual'>('chat');
+  const [llmFallback, setLlmFallback] = useState(() => readLlmFallbackPreference());
 
   const dateStr = formatDate(selectedDate);
 
@@ -88,12 +102,16 @@ export default function DailyLog() {
 
     let apiMessage: string | null = null;
     try {
-      await logMealToBackend(text, ds);
+      await logMealToBackend(text, ds, llmFallback);
       setRefreshKey((k) => k + 1);
       toast.success('Meal logged!');
       setShowChat(false);
       return;
     } catch (e) {
+      if (e instanceof ApiError && e.status === 422) {
+        toast.error(e.message);
+        return;
+      }
       apiMessage = e instanceof Error ? e.message : String(e);
     }
 
@@ -115,6 +133,22 @@ export default function DailyLog() {
         apiMessage ||
           "Couldn't log that meal. Start the API and ensure .env in the project root has OPENROUTER_API_KEY for vague foods. Try e.g. 200g chicken breast.",
       );
+    }
+  };
+
+  const handleManualSubmit = async (data: ManualFoodFormData) => {
+    const ds = dateStr;
+    try {
+      await logManualMealToBackend(ds, data);
+      setRefreshKey((k) => k + 1);
+      toast.success('Food entry added!');
+      setShowChat(false);
+    } catch (e) {
+      if (e instanceof ApiError) {
+        toast.error(e.message);
+        return;
+      }
+      toast.error(e instanceof Error ? e.message : 'Could not add entry');
     }
   };
 
@@ -199,28 +233,81 @@ export default function DailyLog() {
         </Card>
 
         {showChat ? (
-          <Card className="mb-6 bg-white/80 backdrop-blur">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <MessageSquare className="size-5" />
-                Add Food
-              </CardTitle>
-              <CardDescription>
-                Type or speak what you ate (e.g., &quot;chicken breast&quot;, &quot;banana&quot;, &quot;oatmeal&quot;)
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ChatInput onSubmit={handleChatSubmit} />
-              <Button variant="ghost" className="w-full mt-2" onClick={() => setShowChat(false)}>
-                Cancel
-              </Button>
-            </CardContent>
-          </Card>
+          <Tabs
+            value={inputMode}
+            onValueChange={(v) => setInputMode(v as 'chat' | 'manual')}
+            className="mb-6"
+          >
+            <Card className="bg-white/80 backdrop-blur">
+              <CardHeader>
+                <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      {inputMode === 'chat' ? (
+                        <MessageSquare className="size-5" />
+                      ) : (
+                        <Edit3 className="size-5" />
+                      )}
+                      Add Food
+                    </CardTitle>
+                    <CardDescription>
+                      {inputMode === 'chat'
+                        ? 'Type or speak what you ate (e.g., chicken breast, banana, oatmeal)'
+                        : 'Enter food details manually'}
+                    </CardDescription>
+                  </div>
+                  {inputMode === 'chat' && (
+                    <div className="flex shrink-0 items-center gap-2 rounded-lg border border-purple-200 bg-gradient-to-r from-purple-50 to-blue-50 px-3 py-2 dark:border-purple-900/50 dark:from-purple-950/40 dark:to-blue-950/40">
+                      <Sparkles
+                        className={`size-4 shrink-0 ${llmFallback ? 'text-purple-600 dark:text-purple-400' : 'text-muted-foreground'}`}
+                        aria-hidden
+                      />
+                      <Label htmlFor="llm-toggle" className="cursor-pointer text-xs font-medium">
+                        AI Assist
+                      </Label>
+                      <Switch
+                        id="llm-toggle"
+                        checked={llmFallback}
+                        onCheckedChange={(checked) => {
+                          setLlmFallback(checked);
+                          writeLlmFallbackPreference(checked);
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="chat" className="gap-2">
+                    <MessageSquare className="size-4" />
+                    Chat Mode
+                  </TabsTrigger>
+                  <TabsTrigger value="manual" className="gap-2">
+                    <Edit3 className="size-4" />
+                    Manual Input
+                  </TabsTrigger>
+                </TabsList>
+              </CardHeader>
+              <CardContent>
+                <TabsContent value="chat" className="mt-0">
+                  <ChatInput onSubmit={handleChatSubmit} />
+                </TabsContent>
+                <TabsContent value="manual" className="mt-0">
+                  <ManualFoodInput onSubmit={handleManualSubmit} />
+                </TabsContent>
+                <Button variant="ghost" className="mt-4 w-full" onClick={() => setShowChat(false)}>
+                  Cancel
+                </Button>
+              </CardContent>
+            </Card>
+          </Tabs>
         ) : (
-          <Button className="w-full mb-6 h-14 text-lg" onClick={() => setShowChat(true)}>
-            <MessageSquare className="size-5 mr-2" />
-            Add Food via Chat
-          </Button>
+          <div className="mb-6 space-y-1">
+            <Button className="h-14 w-full text-lg" onClick={() => setShowChat(true)}>
+              <MessageSquare className="mr-2 size-5" />
+              Add food
+            </Button>
+            <p className="text-center text-xs text-muted-foreground">Chat or manual entry</p>
+          </div>
         )}
 
         <div className="space-y-3">
@@ -228,8 +315,8 @@ export default function DailyLog() {
             <Card className="bg-white/60 backdrop-blur">
               <CardContent className="p-12 text-center">
                 <p className="text-muted-foreground">No meals logged for this day yet.</p>
-                <p className="text-sm text-muted-foreground mt-2">
-                  Click &quot;Add Food via Chat&quot; to get started!
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Tap Add food, then choose chat mode or manual input.
                 </p>
               </CardContent>
             </Card>

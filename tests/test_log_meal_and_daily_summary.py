@@ -523,3 +523,107 @@ async def test_two_meals_same_day_calories_sum(
     assert sum_r.status_code == 200, sum_r.text
     summary = sum_r.json()
     assert summary["total_calories"] == expected_total
+
+
+async def test_llm_fallback_false_returns_422_without_meal_llm(
+    client,
+    today_iso: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When LLM fallback is off, vague meals fail with 422 and must not call meal LLM."""
+
+    async def boom_llm(_text: str) -> dict:
+        raise AssertionError("parse_meal_with_llm must not run when llm_fallback is false")
+
+    monkeypatch.setattr("app.llm.parse_meal_with_llm", boom_llm)
+
+    log_r = await client.post(
+        "/log-meal",
+        json={
+            "text": "shawarma in laffa from restaurant",
+            "date": today_iso,
+            "llm_fallback": False,
+        },
+    )
+    assert log_r.status_code == 422, log_r.text
+    detail = log_r.json().get("detail", "")
+    assert "database" in detail.lower() or "llm" in detail.lower()
+
+
+async def test_structured_meal_succeeds_with_llm_fallback_false(
+    client,
+    today_iso: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Structured DB path still works when llm_fallback is false."""
+
+    async def boom_llm(_text: str) -> dict:
+        raise AssertionError("LLM must not run for structured gram meals")
+
+    monkeypatch.setattr("app.llm.parse_meal_with_llm", boom_llm)
+
+    log_r = await client.post(
+        "/log-meal",
+        json={
+            "text": "200g chicken breast",
+            "date": today_iso,
+            "llm_fallback": False,
+        },
+    )
+    assert log_r.status_code == 200, log_r.text
+    assert log_r.json()["total_calories"] > 0
+
+
+async def test_manual_meal_log_updates_summary_and_entries(
+    client,
+    today_iso: str,
+) -> None:
+    """POST /log-meal-manual stores entry; summary and /entries match (no LLM)."""
+
+    log_r = await client.post(
+        "/log-meal-manual",
+        json={
+            "date": today_iso,
+            "name": "Custom Salad",
+            "grams": 250.0,
+            "calories": 400.0,
+            "protein": 15.5,
+        },
+    )
+    assert log_r.status_code == 200, log_r.text
+    logged = log_r.json()
+    assert logged["total_calories"] == 400.0
+    assert logged["total_protein_g"] == pytest.approx(15.5, abs=0.01)
+    assert logged.get("estimate_type") is None
+    assert len(logged["items"]) == 1
+    assert logged["items"][0]["label"] == "Custom Salad"
+    assert logged["items"][0]["grams"] == 250.0
+    assert logged["items"][0]["calories"] == 400.0
+
+    sum_r = await client.get("/get-daily-summary", params={"date": today_iso})
+    assert sum_r.status_code == 200, sum_r.text
+    summary = sum_r.json()
+    assert summary["total_calories"] == logged["total_calories"]
+    assert summary.get("total_protein_g") == logged["total_protein_g"]
+
+    ent_r = await client.get("/entries", params={"date": today_iso})
+    assert ent_r.status_code == 200, ent_r.text
+    entries = ent_r.json()["entries"]
+    assert any(e.get("name") == "Custom Salad" for e in entries)
+
+
+async def test_manual_meal_invalid_grams_returns_400(
+    client,
+    today_iso: str,
+) -> None:
+    log_r = await client.post(
+        "/log-meal-manual",
+        json={
+            "date": today_iso,
+            "name": "x",
+            "grams": -1,
+            "calories": 100,
+            "protein": 10,
+        },
+    )
+    assert log_r.status_code == 400, log_r.text

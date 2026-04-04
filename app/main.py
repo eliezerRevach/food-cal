@@ -24,6 +24,7 @@ from app.meals import (
     delete_entry,
     entries_rollups,
     list_entries_for_date,
+    log_manual_meal,
     log_meal,
     validate_date_iso,
 )
@@ -62,6 +63,7 @@ async def root() -> dict[str, str]:
         "service": "Hybrid Calorie App API",
         "docs": "/docs",
         "log_meal": "POST /log-meal",
+        "log_meal_manual": "POST /log-meal-manual",
         "daily_summary": "GET /get-daily-summary?date=YYYY-MM-DD",
         "entries": "GET /entries?date=YYYY-MM-DD",
         "delete_entry": "DELETE /entries/{entry_id}",
@@ -103,11 +105,47 @@ app.add_middleware(
 class LogMealBody(BaseModel):
     text: str
     date: str
+    llm_fallback: bool = True
 
     @field_validator("text")
     @classmethod
     def strip_text(cls, v: str) -> str:
         return v.strip()
+
+
+class LogMealManualBody(BaseModel):
+    date: str
+    name: str
+    grams: float
+    calories: float
+    protein: float
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, v: str) -> str:
+        return v.strip()
+
+
+@app.post("/log-meal-manual")
+async def post_log_meal_manual(body: LogMealManualBody) -> dict:
+    try:
+        return log_manual_meal(
+            body.date,
+            body.name,
+            body.grams,
+            body.calories,
+            body.protein,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except sqlite3.IntegrityError as e:
+        raise HTTPException(status_code=502, detail=f"Database constraint: {e}") from e
+    except TypeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except HTTPException:
+        raise
 
 
 @app.post("/log-meal")
@@ -123,7 +161,7 @@ async def post_log_meal(body: LogMealBody) -> dict:
     if not body.text:
         raise HTTPException(status_code=400, detail="text is required")
     try:
-        return await log_meal(body.text, body.date)
+        return await log_meal(body.text, body.date, llm_fallback=body.llm_fallback)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except ValueError as e:
@@ -132,6 +170,8 @@ async def post_log_meal(body: LogMealBody) -> dict:
         raise HTTPException(status_code=502, detail=f"Database constraint: {e}") from e
     except TypeError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
+    except HTTPException:
+        raise
     except Exception as e:
         # region agent log
         agent_log(
