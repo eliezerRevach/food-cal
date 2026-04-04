@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, type KeyboardEvent } from 'react';
-import { ChevronDown, Plus, Save, X } from 'lucide-react';
+import { ChevronDown, Link2, Plus, Save, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -31,6 +31,14 @@ type SuggestionRow =
   | { type: 'preset'; preset: ManualFoodPreset }
   | { type: 'usda'; name: string };
 
+function formHasValidNumbers(name: string, grams: string, protein: string, calories: string): boolean {
+  if (!name.trim() || !grams || !protein || !calories) return false;
+  const g = parseFloat(grams);
+  const p = parseFloat(protein);
+  const c = parseFloat(calories);
+  return Number.isFinite(g) && Number.isFinite(p) && Number.isFinite(c);
+}
+
 export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
   const [formData, setFormData] = useState({
     name: '',
@@ -45,6 +53,8 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
   const [selectedIndex, setSelectedIndex] = useState(-1);
   /** Open via chevron only — avoids covering weight/calories/protein on focus. */
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  /** When on, editing grams scales calories and protein by the same ratio. */
+  const [portionLinkEnabled, setPortionLinkEnabled] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blurCloseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -91,6 +101,17 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
     };
   }, [formData.name, suggestionsOpen]);
 
+  const isValid = formHasValidNumbers(
+    formData.name,
+    formData.grams,
+    formData.protein,
+    formData.calories,
+  );
+
+  useEffect(() => {
+    if (!isValid) setPortionLinkEnabled(false);
+  }, [isValid]);
+
   const clearSuggestions = () => {
     setPresetSuggestions([]);
     setUsdaSuggestions([]);
@@ -132,21 +153,21 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
   };
 
   const handleSubmit = () => {
-    if (formData.name && formData.grams && formData.protein && formData.calories) {
-      onSubmit({
-        name: formData.name,
-        grams: parseFloat(formData.grams),
-        protein: parseFloat(formData.protein),
-        calories: parseFloat(formData.calories),
-      });
-      setFormData({
-        name: '',
-        grams: '',
-        protein: '',
-        calories: '',
-      });
-      clearSuggestions();
-    }
+    if (!isValid) return;
+    onSubmit({
+      name: formData.name.trim(),
+      grams: parseFloat(formData.grams),
+      protein: parseFloat(formData.protein),
+      calories: parseFloat(formData.calories),
+    });
+    setFormData({
+      name: '',
+      grams: '',
+      protein: '',
+      calories: '',
+    });
+    setPortionLinkEnabled(false);
+    clearSuggestions();
   };
 
   const handleSavePreset = () => {
@@ -213,9 +234,33 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
     }
   };
 
-  const isValid = Boolean(
-    formData.name && formData.grams && formData.protein && formData.calories,
-  );
+  const handleGramsChange = (nextGrams: string) => {
+    setFormData((prev) => {
+      if (!portionLinkEnabled) {
+        return { ...prev, grams: nextGrams };
+      }
+      if (nextGrams.trim() === '') {
+        return { ...prev, grams: nextGrams };
+      }
+      const prevG = parseFloat(prev.grams);
+      const nextG = parseFloat(nextGrams);
+      if (!Number.isFinite(prevG) || prevG <= 0 || !Number.isFinite(nextG)) {
+        return { ...prev, grams: nextGrams };
+      }
+      const prevC = parseFloat(prev.calories);
+      const prevP = parseFloat(prev.protein);
+      if (!Number.isFinite(prevC) || !Number.isFinite(prevP)) {
+        return { ...prev, grams: nextGrams };
+      }
+      const ratio = nextG / prevG;
+      return {
+        ...prev,
+        grams: nextGrams,
+        calories: String(Math.round(prevC * ratio)),
+        protein: String(Math.round(prevP * ratio * 10) / 10),
+      };
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -340,7 +385,7 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
             type="number"
             placeholder="150"
             value={formData.grams}
-            onChange={(e) => setFormData({ ...formData, grams: e.target.value })}
+            onChange={(e) => handleGramsChange(e.target.value)}
             onKeyDown={handleOtherKeyDown}
             className="h-11"
             min={0}
@@ -380,6 +425,74 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
             min={0}
             step={0.1}
           />
+        </div>
+      </div>
+
+      <div
+        className={cn(
+          'sticky bottom-0 z-10 -mx-1 mt-1 rounded-2xl border border-teal-200/70 bg-background/85 px-3 py-2.5 shadow-[0_-8px_24px_-8px_rgba(13,148,136,0.12)] backdrop-blur-md dark:border-teal-800/50 dark:shadow-[0_-8px_24px_-8px_rgba(45,212,191,0.08)]',
+          portionLinkEnabled &&
+            'border-amber-200/80 bg-gradient-to-br from-teal-500/[0.07] via-background/90 to-amber-500/[0.09] dark:border-amber-900/40',
+        )}
+      >
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <div
+              className={cn(
+                'flex size-9 shrink-0 items-center justify-center rounded-xl border transition-colors',
+                portionLinkEnabled
+                  ? 'border-teal-400/60 bg-teal-500/15 text-teal-700 dark:border-teal-600/50 dark:bg-teal-950/50 dark:text-teal-300'
+                  : 'border-border bg-muted/50 text-muted-foreground',
+              )}
+              aria-hidden
+            >
+              <Link2 className={cn('size-4', portionLinkEnabled && 'text-teal-600 dark:text-teal-400')} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium leading-tight text-foreground">Portion link</p>
+              <p className="text-muted-foreground text-xs leading-snug">
+                {portionLinkEnabled
+                  ? 'Grams rescales kcal and protein together.'
+                  : 'Fill all fields, then link to scale portions from weight.'}
+              </p>
+            </div>
+          </div>
+          <div
+            className="flex shrink-0 rounded-full border border-border/80 bg-muted/30 p-0.5 shadow-inner"
+            role="group"
+            aria-label="Portion scaling mode"
+          >
+            <button
+              type="button"
+              className={cn(
+                'rounded-full px-3 py-1.5 text-xs font-medium transition-all',
+                !portionLinkEnabled
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              aria-pressed={!portionLinkEnabled}
+              onClick={() => setPortionLinkEnabled(false)}
+            >
+              Independent
+            </button>
+            <button
+              type="button"
+              className={cn(
+                'rounded-full px-3 py-1.5 text-xs font-medium transition-all',
+                portionLinkEnabled
+                  ? 'bg-gradient-to-r from-teal-600 to-amber-600 text-white shadow-sm dark:from-teal-500 dark:to-amber-600'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              aria-pressed={portionLinkEnabled}
+              aria-disabled={!isValid}
+              disabled={!isValid && !portionLinkEnabled}
+              onClick={() => {
+                if (isValid) setPortionLinkEnabled(true);
+              }}
+            >
+              Linked
+            </button>
+          </div>
         </div>
       </div>
 
