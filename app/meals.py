@@ -8,6 +8,8 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import HTTPException
+
 import app.llm as llm_mod
 from app import db
 from app.food_resolve import resolve_food_row
@@ -194,7 +196,60 @@ def _persist_structured_entry(
     return _fetch_entry(conn, int(eid))
 
 
-async def log_meal(text: str, date_iso: str) -> dict[str, Any]:
+def log_manual_meal(
+    date_iso: str,
+    name: str,
+    grams: float,
+    calories: float,
+    protein: float,
+) -> dict[str, Any]:
+    """Insert one entry and one item from user-supplied nutrition (no food DB or LLM)."""
+    try:
+        date_iso = validate_date_iso(date_iso)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    name_lbl = name.strip()
+    if not name_lbl:
+        raise HTTPException(status_code=400, detail="name is required")
+    if len(name_lbl) > 120:
+        raise HTTPException(status_code=400, detail="name must be at most 120 characters")
+    if not math.isfinite(grams) or grams <= 0:
+        raise HTTPException(status_code=400, detail="grams must be a positive finite number")
+    if not math.isfinite(calories) or calories < 0:
+        raise HTTPException(status_code=400, detail="calories must be a non-negative finite number")
+    if not math.isfinite(protein) or protein < 0:
+        raise HTTPException(status_code=400, detail="protein must be a non-negative finite number")
+
+    conn = db.get_connection()
+    raw_text = f"Manual: {name_lbl}"
+    total_kcal = round(float(calories), 1)
+    total_prot = round(float(protein), 2)
+
+    with db.transaction() as c:
+        cur = c.execute(
+            """
+            INSERT INTO entries (
+                date_iso, total_calories, total_protein_g,
+                estimate_type, calories_likely, calories_low, calories_high,
+                raw_text, created_at
+            ) VALUES (?, ?, ?, NULL, NULL, NULL, NULL, ?, datetime('now'))
+            """,
+            (date_iso, total_kcal, total_prot, raw_text),
+        )
+        eid = cur.lastrowid
+        c.execute(
+            """
+            INSERT INTO items (entry_id, label, grams, food_id, calories_allocated)
+            VALUES (?, ?, ?, NULL, ?)
+            """,
+            (eid, name_lbl, grams, total_kcal),
+        )
+
+    return _fetch_entry(conn, int(eid))
+
+
+async def log_meal(text: str, date_iso: str, *, llm_fallback: bool = True) -> dict[str, Any]:
     conn = db.get_connection()
     needs_h = meal_needs_estimate_heuristic(text)
     local = None if needs_h else parse_local_meal(text)
@@ -267,6 +322,15 @@ async def log_meal(text: str, date_iso: str) -> dict[str, Any]:
                 if grams_bare is not None:
                     fdc_resolved = [(grams_bare, fdc_q, row)]
                     return _persist_structured_entry(conn, date_iso, text, fdc_resolved)
+
+    if not llm_fallback:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Could not resolve this meal from the food database. "
+                "Turn on LLM fallback or use structured input (e.g. 200g chicken breast)."
+            ),
+        )
 
     # region agent log
     agent_log("meals.py:log_meal", "calling_llm", {"text_len": len(text)}, "H2")

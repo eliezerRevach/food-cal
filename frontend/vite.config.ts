@@ -11,6 +11,7 @@ export default defineConfig({
     proxy: {
       // Same-origin requests from the Vite dev server avoid browser CORS/mixed-origin issues.
       '/log-meal': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/log-meal-manual': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/get-daily-summary': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/entries': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/entries-rollups': { target: 'http://127.0.0.1:8000', changeOrigin: true },
