@@ -31,6 +31,8 @@ async def test_get_entries_lists_logged_meal(
     assert "chicken" in e["name"].lower() or "breast" in e["name"].lower()
     assert e["calories"] > 0
     assert "timestamp" in e
+    assert e.get("grams_total") == 200.0
+    assert e.get("grams_partial") is False
 
 
 async def test_delete_entry_removes_row(
@@ -63,6 +65,42 @@ async def test_delete_entry_removes_row(
 async def test_entries_invalid_date(client) -> None:
     r = await client.get("/entries", params={"date": "2024-13-40"})
     assert r.status_code == 400
+
+
+async def test_get_entries_grams_partial_when_some_items_missing_grams(
+    client,
+    today_iso: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_llm(_text: str) -> dict:
+        return {
+            "items": [
+                {"food": "rice", "grams": 100},
+                {"food": "sauce", "grams": None},
+            ],
+            "estimate_type": "estimated",
+            "calories_likely": 300,
+            "total_protein_g": 5.0,
+        }
+
+    monkeypatch.setattr("app.llm.parse_meal_with_llm", fake_llm)
+
+    log_r = await client.post(
+        "/log-meal",
+        json={"text": "mystery bowl from vague place", "date": today_iso, "llm_fallback": True},
+    )
+    assert log_r.status_code == 200, log_r.text
+
+    r = await client.get("/entries", params={"date": today_iso})
+    assert r.status_code == 200, r.text
+    entries = r.json()["entries"]
+    partial = next(
+        (x for x in entries if x.get("grams_partial") is True),
+        None,
+    )
+    assert partial is not None
+    assert partial["grams_total"] == 100.0
+    assert partial["grams_partial"] is True
 
 
 async def test_entries_rollups_groups_by_day(

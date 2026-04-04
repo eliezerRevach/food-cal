@@ -409,6 +409,48 @@ def daily_summary(date_iso: str) -> dict[str, Any]:
     return out
 
 
+def _grams_rollups_for_entries(
+    conn: sqlite3.Connection, entry_ids: list[int]
+) -> dict[int, tuple[float | None, bool]]:
+    """Per entry_id: (grams_total or None if unknown, grams_partial).
+
+    grams_total is the sum of non-null item grams. None when every line item has
+    grams NULL. grams_partial is True when at least one item has grams and at
+    least one is missing grams.
+    """
+    if not entry_ids:
+        return {}
+    placeholders = ",".join("?" * len(entry_ids))
+    agg_rows = conn.execute(
+        f"""
+        SELECT
+            entry_id,
+            COUNT(*) AS n_items,
+            SUM(CASE WHEN grams IS NOT NULL THEN 1 ELSE 0 END) AS n_with_grams,
+            SUM(grams) AS sum_grams
+        FROM items
+        WHERE entry_id IN ({placeholders})
+        GROUP BY entry_id
+        """,
+        entry_ids,
+    ).fetchall()
+    out: dict[int, tuple[float | None, bool]] = {}
+    for ar in agg_rows:
+        eid = int(ar["entry_id"])
+        n_items = int(ar["n_items"] or 0)
+        n_with = int(ar["n_with_grams"] or 0)
+        n_null = n_items - n_with
+        raw_sum = ar["sum_grams"]
+        if n_with == 0:
+            out[eid] = (None, False)
+            continue
+        total = float(raw_sum) if raw_sum is not None else 0.0
+        grams_total = round(total, 1)
+        grams_partial = n_null > 0
+        out[eid] = (grams_total, grams_partial)
+    return out
+
+
 def list_entries_for_date(date_iso: str) -> list[dict[str, Any]]:
     conn = db.get_connection()
     date_iso = validate_date_iso(date_iso)
@@ -421,6 +463,12 @@ def list_entries_for_date(date_iso: str) -> list[dict[str, Any]]:
         """,
         (date_iso,),
     ).fetchall()
+    valid_eids: list[int] = []
+    for r in rows:
+        if r["total_calories"] is not None:
+            valid_eids.append(int(r["id"]))
+    gram_map = _grams_rollups_for_entries(conn, valid_eids)
+
     out: list[dict[str, Any]] = []
     for r in rows:
         eid = int(r["id"])
@@ -432,15 +480,22 @@ def list_entries_for_date(date_iso: str) -> list[dict[str, Any]]:
         protein = round(float(tp)) if tp is not None else 0
         created = r["created_at"]
         ts = _parse_created_at_to_ms(created, eid)
-        out.append(
-            {
-                "id": eid,
-                "name": name,
-                "calories": round(float(tc)),
-                "protein": protein,
-                "timestamp": ts,
-            }
-        )
+        row: dict[str, Any] = {
+            "id": eid,
+            "name": name,
+            "calories": round(float(tc)),
+            "protein": protein,
+            "timestamp": ts,
+        }
+        if eid in gram_map:
+            g_tot, g_part = gram_map[eid]
+            row["grams_total"] = g_tot
+            row["grams_partial"] = g_part
+        else:
+            # No item rows (legacy or inconsistent): unknown grams
+            row["grams_total"] = None
+            row["grams_partial"] = False
+        out.append(row)
     return out
 
 
