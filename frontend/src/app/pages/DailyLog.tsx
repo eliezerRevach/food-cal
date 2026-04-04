@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { ArrowLeft, Calendar as CalendarIcon, Edit3, MessageSquare, Sparkles } from 'lucide-react';
 import { Button } from '../components/ui/button';
@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { ChatInput } from '../components/ChatInput';
 import { ManualFoodInput, type ManualFoodFormData } from '../components/ManualFoodInput';
 import { FoodEntry as FoodEntryCard } from '../components/FoodEntry';
+import { PendingFoodEntryCard } from '../components/PendingFoodEntryCard';
 import {
   getOfflineDayLog,
   addOfflineFoodEntry,
@@ -33,6 +34,35 @@ import {
 } from '../utils/api';
 import { toast } from 'sonner';
 
+async function mergeDayEntriesForDate(
+  ds: string,
+): Promise<{ merged: FoodEntry[]; loadError: string | null }> {
+  const offline = getOfflineDayLog(ds).entries;
+  try {
+    const { entries: apiRows } = await fetchEntriesForDate(ds);
+    const merged: FoodEntry[] = apiRows.map((e) => ({
+      id: String(e.id),
+      date: ds,
+      name: e.name,
+      calories: e.calories,
+      protein: e.protein,
+      timestamp: e.timestamp,
+      gramsTotal: e.grams_total ?? null,
+      gramsPartial: e.grams_partial ?? false,
+    }));
+    return {
+      merged: [...merged, ...offline].sort((a, b) => b.timestamp - a.timestamp),
+      loadError: null,
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      merged: [...offline].sort((a, b) => b.timestamp - a.timestamp),
+      loadError: msg,
+    };
+  }
+}
+
 export default function DailyLog() {
   const { date } = useParams<{ date: string }>();
   const navigate = useNavigate();
@@ -47,7 +77,10 @@ export default function DailyLog() {
   }, [date]);
   const [entries, setEntries] = useState<FoodEntry[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [pendingEntry, setPendingEntry] = useState<{
+    mode: 'chat' | 'manual';
+    preview?: string;
+  } | null>(null);
   const [showChat, setShowChat] = useState(false);
   const [inputMode, setInputMode] = useState<'chat' | 'manual'>('chat');
   const [llmFallback, setLlmFallback] = useState(() => readLlmFallbackPreference());
@@ -58,40 +91,22 @@ export default function DailyLog() {
     navigate(`/day/${dateStr}`, { replace: true });
   }, [dateStr, navigate]);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
+  const loadDayEntries = useCallback(
+    async (opts?: { signal?: AbortSignal }) => {
       const ds = formatDate(selectedDate);
-      const offline = getOfflineDayLog(ds).entries;
-      try {
-        const { entries: apiRows } = await fetchEntriesForDate(ds);
-        const merged: FoodEntry[] = apiRows.map((e) => ({
-          id: String(e.id),
-          date: ds,
-          name: e.name,
-          calories: e.calories,
-          protein: e.protein,
-          timestamp: e.timestamp,
-          gramsTotal: e.grams_total ?? null,
-          gramsPartial: e.grams_partial ?? false,
-        }));
-        if (!cancelled) {
-          setEntries([...merged, ...offline].sort((a, b) => b.timestamp - a.timestamp));
-          setLoadError(null);
-        }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (!cancelled) {
-          setEntries([...offline].sort((a, b) => b.timestamp - a.timestamp));
-          setLoadError(msg);
-        }
-      }
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedDate, refreshKey]);
+      const { merged, loadError: err } = await mergeDayEntriesForDate(ds);
+      if (opts?.signal?.aborted) return;
+      setEntries(merged);
+      setLoadError(err);
+    },
+    [selectedDate],
+  );
+
+  useEffect(() => {
+    const ac = new AbortController();
+    void loadDayEntries({ signal: ac.signal });
+    return () => ac.abort();
+  }, [selectedDate, loadDayEntries]);
 
   const totals = useMemo(() => {
     const totalCalories = entries.reduce((sum, e) => sum + e.calories, 0);
@@ -101,63 +116,75 @@ export default function DailyLog() {
 
   const handleChatSubmit = async (text: string) => {
     const ds = dateStr;
-
-    let apiMessage: string | null = null;
+    const trimmed = text.trim();
+    const preview = trimmed.slice(0, 80);
+    setPendingEntry({ mode: 'chat', preview: preview || undefined });
     try {
-      await logMealToBackend(text, ds, llmFallback);
-      setRefreshKey((k) => k + 1);
-      toast.success('Meal logged!');
-      setShowChat(false);
-      return;
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 422) {
-        toast.error(e.message);
+      let apiMessage: string | null = null;
+      try {
+        await logMealToBackend(text, ds, llmFallback);
+        await loadDayEntries();
+        toast.success('Meal logged!');
+        setShowChat(false);
         return;
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 422) {
+          toast.error(e.message);
+          return;
+        }
+        apiMessage = e instanceof Error ? e.message : String(e);
       }
-      apiMessage = e instanceof Error ? e.message : String(e);
-    }
 
-    const parsed = parseFoodInput(text);
+      const parsed = parseFoodInput(text);
 
-    if (parsed && parsed.name) {
-      addOfflineFoodEntry(ds, {
-        name: parsed.name,
-        calories: parsed.calories || 0,
-        protein: parsed.protein || 0,
-      });
+      if (parsed && parsed.name) {
+        addOfflineFoodEntry(ds, {
+          name: parsed.name,
+          calories: parsed.calories || 0,
+          protein: parsed.protein || 0,
+        });
 
-      setRefreshKey((k) => k + 1);
-      toast.success(`Added ${parsed.name}! (saved in this browser only — not in the database)`);
-      if (apiMessage) toast.info(`API unavailable: ${apiMessage}`);
-      setShowChat(false);
-    } else {
-      toast.error(
-        apiMessage ||
-          "Couldn't log that meal. Start the API and ensure .env in the project root has OPENROUTER_API_KEY for vague foods. Try e.g. 200g chicken breast.",
-      );
+        await loadDayEntries();
+        toast.success(`Added ${parsed.name}! (saved in this browser only — not in the database)`);
+        if (apiMessage) toast.info(`API unavailable: ${apiMessage}`);
+        setShowChat(false);
+      } else {
+        toast.error(
+          apiMessage ||
+            "Couldn't log that meal. Start the API and ensure .env in the project root has OPENROUTER_API_KEY for vague foods. Try e.g. 200g chicken breast.",
+        );
+      }
+    } finally {
+      setPendingEntry(null);
     }
   };
 
   const handleManualSubmit = async (data: ManualFoodFormData) => {
     const ds = dateStr;
+    const preview = data.name.trim().slice(0, 80);
+    setPendingEntry({ mode: 'manual', preview: preview || undefined });
     try {
-      await logManualMealToBackend(ds, data);
-      setRefreshKey((k) => k + 1);
-      toast.success('Food entry added!');
-      setShowChat(false);
-    } catch (e) {
-      if (e instanceof ApiError) {
-        toast.error(e.message);
-        return;
+      try {
+        await logManualMealToBackend(ds, data);
+        await loadDayEntries();
+        toast.success('Food entry added!');
+        setShowChat(false);
+      } catch (e) {
+        if (e instanceof ApiError) {
+          toast.error(e.message);
+          return;
+        }
+        toast.error(e instanceof Error ? e.message : 'Could not add entry');
       }
-      toast.error(e instanceof Error ? e.message : 'Could not add entry');
+    } finally {
+      setPendingEntry(null);
     }
   };
 
   const handleDeleteEntry = async (entryId: string) => {
     if (entryId.startsWith('offline-')) {
       deleteOfflineFoodEntry(dateStr, entryId);
-      setRefreshKey((k) => k + 1);
+      await loadDayEntries();
       toast.success('Entry deleted');
       return;
     }
@@ -168,7 +195,7 @@ export default function DailyLog() {
     }
     try {
       await deleteEntryRemote(id);
-      setRefreshKey((k) => k + 1);
+      await loadDayEntries();
       toast.success('Entry deleted');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not delete entry');
@@ -313,7 +340,10 @@ export default function DailyLog() {
         )}
 
         <div className="space-y-3">
-          {entries.length === 0 ? (
+          {pendingEntry ? (
+            <PendingFoodEntryCard mode={pendingEntry.mode} preview={pendingEntry.preview} />
+          ) : null}
+          {entries.length === 0 && !pendingEntry ? (
             <Card className="bg-white/60 backdrop-blur">
               <CardContent className="p-12 text-center">
                 <p className="text-muted-foreground">No meals logged for this day yet.</p>
