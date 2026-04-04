@@ -1,40 +1,27 @@
-import { useState, useRef, useEffect, type KeyboardEvent } from 'react';
-import { Mic, Send, Square } from 'lucide-react';
+import { useState, useRef, useEffect, useMemo, type KeyboardEvent } from 'react';
+import { Mic, Send, Square, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
 import { fetchFoodSuggestions } from '../utils/api';
+import { activeSearchQuery, replaceActiveToken } from '../utils/foodNameQuery';
+import { deleteManualPreset, matchManualPresets, type ManualFoodPreset } from '../utils/manualPresets';
 
 interface ChatInputProps {
   onSubmit: (text: string) => void | Promise<void>;
   placeholder?: string;
 }
 
-/** Last comma-separated segment, then last whitespace token — min length 2 to query. */
-function activeSearchQuery(value: string): string | null {
-  const lastComma = value.lastIndexOf(',');
-  const segment = lastComma === -1 ? value : value.slice(lastComma + 1);
-  const m = segment.match(/(\S+)$/);
-  if (!m) return null;
-  const q = m[1];
-  return q.length >= 2 ? q : null;
-}
-
-/** Replace the last token in the last segment with `replacement`. */
-function replaceActiveToken(value: string, replacement: string): string {
-  const lastComma = value.lastIndexOf(',');
-  const prefix = lastComma === -1 ? '' : value.slice(0, lastComma + 1);
-  const segment = lastComma === -1 ? value : value.slice(lastComma + 1);
-  const m = segment.match(/^(.*?)(\S+)$/);
-  if (!m) return prefix + replacement;
-  return prefix + m[1] + replacement;
-}
+type SuggestionRow =
+  | { type: 'preset'; preset: ManualFoodPreset }
+  | { type: 'usda'; name: string };
 
 export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast and rice'" }: ChatInputProps) {
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [presetSuggestions, setPresetSuggestions] = useState<ManualFoodPreset[]>([]);
+  const [usdaSuggestions, setUsdaSuggestions] = useState<string[]>([]);
   const [usdaEnabled, setUsdaEnabled] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [focused, setFocused] = useState(false);
@@ -43,20 +30,30 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blurCloseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const suggestionRows = useMemo((): SuggestionRow[] => {
+    const presetRows: SuggestionRow[] = presetSuggestions.map((p) => ({ type: 'preset', preset: p }));
+    const usdaRows: SuggestionRow[] = usdaSuggestions.map((name) => ({ type: 'usda', name }));
+    return [...presetRows, ...usdaRows];
+  }, [presetSuggestions, usdaSuggestions]);
+
   useEffect(() => {
     const q = activeSearchQuery(input);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (!q) {
-      setSuggestions([]);
+      setPresetSuggestions([]);
+      setUsdaSuggestions([]);
       setSelectedIndex(-1);
       return;
     }
     debounceRef.current = setTimeout(() => {
       void (async () => {
-        const { suggestions: list, usdaEnabled: enabled } = await fetchFoodSuggestions(q, 12);
-        setSuggestions(list);
+        const presets = matchManualPresets(q, 6);
+        setPresetSuggestions(presets);
+        const { suggestions: list, usdaEnabled: enabled } = await fetchFoodSuggestions(q, 6);
+        setUsdaSuggestions(list);
         setUsdaEnabled(enabled);
-        setSelectedIndex(list.length > 0 ? 0 : -1);
+        const total = presets.length + list.length;
+        setSelectedIndex(total > 0 ? 0 : -1);
       })();
     }, 350);
     return () => {
@@ -71,17 +68,31 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
     };
   }, []);
 
-  const applySuggestion = (text: string) => {
+  const applySuggestionRow = (row: SuggestionRow) => {
+    const text = row.type === 'preset' ? row.preset.name : row.name;
     setInput(replaceActiveToken(input, text));
-    setSuggestions([]);
+    setPresetSuggestions([]);
+    setUsdaSuggestions([]);
     setSelectedIndex(-1);
+  };
+
+  const removePreset = (id: string) => {
+    if (!deleteManualPreset(id)) return;
+    setPresetSuggestions((prev) => {
+      const next = prev.filter((p) => p.id !== id);
+      const total = next.length + usdaSuggestions.length;
+      setSelectedIndex(total > 0 ? 0 : -1);
+      return next;
+    });
+    toast.success('Removed from saved list');
   };
 
   const handleSubmit = async () => {
     const t = input.trim();
     if (!t || isSending) return;
     setInput('');
-    setSuggestions([]);
+    setPresetSuggestions([]);
+    setUsdaSuggestions([]);
     setSelectedIndex(-1);
     setIsSending(true);
     try {
@@ -92,11 +103,12 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    const showList = focused && suggestions.length > 0;
+    const showList = focused && suggestionRows.length > 0;
 
     if (e.key === 'Escape' && showList) {
       e.preventDefault();
-      setSuggestions([]);
+      setPresetSuggestions([]);
+      setUsdaSuggestions([]);
       setSelectedIndex(-1);
       return;
     }
@@ -104,7 +116,7 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
     if (showList && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
       e.preventDefault();
       if (e.key === 'ArrowDown') {
-        setSelectedIndex((i) => (i < suggestions.length - 1 ? i + 1 : i));
+        setSelectedIndex((i) => (i < suggestionRows.length - 1 ? i + 1 : i));
       } else {
         setSelectedIndex((i) => (i > 0 ? i - 1 : -1));
       }
@@ -112,10 +124,11 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
     }
 
     if (e.key === 'Enter') {
-      if (showList && suggestions.length > 0) {
+      if (showList && suggestionRows.length > 0) {
         e.preventDefault();
         const idx = selectedIndex >= 0 ? selectedIndex : 0;
-        applySuggestion(suggestions[idx]!);
+        const row = suggestionRows[idx];
+        if (row) applySuggestionRow(row);
         return;
       }
       void handleSubmit();
@@ -178,13 +191,10 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
     }
   };
 
-  const showDropdown = focused && suggestions.length > 0;
+  const showDropdown = focused && suggestionRows.length > 0;
   const activeQ = activeSearchQuery(input);
   const showUsdaHint =
-    focused &&
-    Boolean(activeQ) &&
-    !usdaEnabled &&
-    suggestions.length === 0;
+    focused && Boolean(activeQ) && !usdaEnabled && suggestionRows.length === 0;
 
   return (
     <div className="flex gap-2 items-start w-full">
@@ -214,20 +224,63 @@ export function ChatInput({ onSubmit, placeholder = "Try: 'I had chicken breast 
             className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md border border-border bg-popover text-popover-foreground shadow-md"
             role="listbox"
           >
-            {suggestions.map((s, idx) => (
-              <li key={`${s}-${idx}`} role="option" aria-selected={selectedIndex === idx}>
-                <button
-                  type="button"
-                  className={`w-full cursor-pointer px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground ${
-                    selectedIndex === idx ? 'bg-accent text-accent-foreground' : ''
-                  }`}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => applySuggestion(s)}
+            {suggestionRows.map((row, idx) =>
+              row.type === 'preset' ? (
+                <li
+                  key={`p-${row.preset.id}`}
+                  className="flex items-stretch"
+                  role="option"
+                  aria-selected={selectedIndex === idx}
                 >
-                  {s}
-                </button>
-              </li>
-            ))}
+                  <button
+                    type="button"
+                    className={`min-w-0 flex-1 cursor-pointer px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground ${
+                      selectedIndex === idx ? 'bg-accent text-accent-foreground' : ''
+                    }`}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => applySuggestionRow(row)}
+                  >
+                    <div className="font-medium">{row.preset.name}</div>
+                    <div className="text-muted-foreground text-xs">
+                      Saved · {row.preset.calories} kcal · {row.preset.grams}g · P {row.preset.protein}g
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Remove from saved list"
+                    className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive shrink-0 px-2.5"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      removePreset(row.preset.id);
+                    }}
+                  >
+                    <X className="size-4" />
+                  </button>
+                </li>
+              ) : (
+                <li
+                  key={`u-${row.name}-${idx}`}
+                  role="option"
+                  aria-selected={selectedIndex === idx}
+                >
+                  <button
+                    type="button"
+                    className={`w-full cursor-pointer px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground ${
+                      selectedIndex === idx ? 'bg-accent text-accent-foreground' : ''
+                    }`}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => applySuggestionRow(row)}
+                  >
+                    {row.name}
+                  </button>
+                </li>
+              ),
+            )}
           </ul>
         )}
         {showUsdaHint && (
