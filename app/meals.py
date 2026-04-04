@@ -21,6 +21,7 @@ from app.hebrew_lexicon import (
     fdc_style_single_food_query,
 )
 from app.nutrition import kcal_and_protein
+from app.portion_yield import effective_grams
 from app.debug_agent_log import agent_log
 from app.parse_local import meal_needs_estimate_heuristic, parse_local_meal
 
@@ -158,14 +159,17 @@ def _persist_structured_entry(
     total_prot = 0.0
     lines: list[tuple[float, str, int, float]] = []
     for grams, name, food_row in resolved:
+        g_eff = effective_grams(conn, name, grams)
+        if g_eff is None:
+            g_eff = grams
         k, p = kcal_and_protein(
-            grams,
+            g_eff,
             float(food_row["kcal_per_100g"]),
             float(food_row["protein_per_100g"]),
         )
         total_kcal += k
         total_prot += p
-        lines.append((grams, name, int(food_row["id"]), k))
+        lines.append((g_eff, name, int(food_row["id"]), k))
 
     with db.transaction() as c:
         cur = c.execute(
@@ -383,6 +387,7 @@ async def log_meal(text: str, date_iso: str, *, llm_fallback: bool = True) -> di
                 grams_f = float(g) if g is not None else None
             except (TypeError, ValueError):
                 grams_f = None
+            grams_f = effective_grams(c, label or "unknown", grams_f)
             c.execute(
                 """
                 INSERT INTO items (entry_id, label, grams, food_id, calories_allocated)

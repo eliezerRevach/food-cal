@@ -48,6 +48,7 @@ The user may give vague restaurant-style text. Respond with JSON matching this s
 }
 Use estimate_type "range" for restaurant or uncertain portions. calories_low/high bound plausible totals.
 total_protein_g is your best estimate of total dietary protein for the whole meal in grams.
+For bone-in cuts (e.g. wings, drumsticks, whole fish with bones), put edible meat grams in each item's "grams" field — exclude non-edible bone weight so grams align with calories and protein for that line.
 For a typical Israeli full serving (e.g. shawarma in laffa with fries inside), treat calories_likely as roughly 900–1300 kcal and total_protein_g around 40–60 unless the user clearly indicates a snack or half portion.
 Include all JSON keys even if uncertain; guess grams, calories, and protein responsibly.
 Reply with JSON only — no prose before or after the object."""

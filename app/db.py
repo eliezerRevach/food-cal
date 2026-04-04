@@ -32,6 +32,14 @@ SEED_FOOD_BASELINES: list[tuple[str, float, float, str | None, float | None]] = 
     ("yogurt", 59.0, 10.0, "dairy", None),
 ]
 
+# Bone-in / as-weighed → approximate edible fraction (yield) for gram-based kcal when labels match.
+SEED_PORTION_YIELD_RULES: list[tuple[str, float, int]] = [
+    ("chicken wings", 0.6, 1),
+    ("chicken drumstick", 0.7, 1),
+    ("chicken thigh with bone", 0.75, 1),
+    ("whole fish with bones", 0.55, 1),
+]
+
 _conn: sqlite3.Connection | None = None
 
 
@@ -140,6 +148,12 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             food_category TEXT,
             default_serving_grams REAL
         );
+
+        CREATE TABLE IF NOT EXISTS portion_yield_rules (
+            phrase TEXT PRIMARY KEY,
+            edible_ratio REAL NOT NULL,
+            bone_in INTEGER NOT NULL
+        );
         """
     )
     _migrate_foods(conn)
@@ -178,6 +192,24 @@ def _seed_if_empty(conn: sqlite3.Connection) -> None:
             """,
             (category, serving, name),
         )
+
+    if SEED_PORTION_YIELD_RULES:
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO portion_yield_rules (phrase, edible_ratio, bone_in)
+            VALUES (lower(?), ?, ?)
+            """,
+            [(p, r, b) for p, r, b in SEED_PORTION_YIELD_RULES],
+        )
+        for phrase, ratio, bone in SEED_PORTION_YIELD_RULES:
+            conn.execute(
+                """
+                UPDATE portion_yield_rules
+                SET edible_ratio = ?, bone_in = ?
+                WHERE lower(phrase) = lower(?)
+                """,
+                (ratio, bone, phrase),
+            )
 
 
 def find_food_by_name(conn: sqlite3.Connection, normalized_name: str) -> sqlite3.Row | None:
