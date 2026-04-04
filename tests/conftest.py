@@ -47,6 +47,7 @@ def _stub_open_food_facts(
         q = query.lower().strip()
         canned = {
             "chicken breast": FoodLookupResult(165.0, 31.0, 150.0, "protein"),
+            "chicken wings": FoodLookupResult(165.0, 31.0, 150.0, "protein"),
             "rice": FoodLookupResult(130.0, 2.7, 150.0, "grain"),
             "salmon": FoodLookupResult(206.0, 22.0, 150.0, "protein"),
             "apple": FoodLookupResult(52.0, 0.3, 185.0, "fruit"),

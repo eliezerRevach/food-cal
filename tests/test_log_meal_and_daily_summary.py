@@ -13,6 +13,54 @@ from app.food_types import FoodLookupResult
 from tests.conftest import FAKE_SHAWARMA_LLM_RESPONSE
 
 
+async def test_structured_chicken_wings_applies_portion_yield(
+    client,
+    today_iso: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """200g scale weight × 0.6 edible yield → 120g for kcal; matches stub 165 kcal/100g."""
+
+    async def boom_llm(_text: str) -> dict:
+        raise AssertionError("LLM must not run for structured gram meals")
+
+    monkeypatch.setattr("app.llm.parse_meal_with_llm", boom_llm)
+
+    log_r = await client.post(
+        "/log-meal",
+        json={"text": "200g chicken wings", "date": today_iso},
+    )
+    assert log_r.status_code == 200, log_r.text
+    logged = log_r.json()
+    assert logged["items"][0]["grams"] == pytest.approx(120.0)
+    assert logged["total_calories"] == pytest.approx(198.0, abs=0.5)
+    assert logged["total_protein_g"] == pytest.approx(37.2, abs=0.1)
+
+
+async def test_llm_chicken_wings_line_item_grams_scaled(
+    client,
+    today_iso: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_llm(_text: str) -> dict:
+        _ = _text
+        return {
+            "items": [{"food": "chicken wings", "grams": 100}],
+            "estimate_type": "estimated",
+            "calories_likely": 200,
+            "total_protein_g": 20.0,
+        }
+
+    monkeypatch.setattr("app.llm.parse_meal_with_llm", fake_llm)
+
+    log_r = await client.post(
+        "/log-meal",
+        json={"text": "some wings", "date": today_iso, "llm_fallback": True},
+    )
+    assert log_r.status_code == 200, log_r.text
+    logged = log_r.json()
+    assert logged["items"][0]["grams"] == pytest.approx(60.0)
+
+
 @pytest.mark.parametrize(
     "meal_text",
     [
