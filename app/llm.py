@@ -34,6 +34,11 @@ def _openrouter_http_error_message(response: httpx.Response) -> str:
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+_FOOD_QUERY_SYSTEM_PROMPT = """You translate a single food or ingredient phrase into one English search string suitable for Open Food Facts or USDA food databases.
+Preserve cooking state and modifiers (e.g. smoked, grilled, canned), species, and common cuts.
+Respond with strict JSON only, no markdown: {"english_query": "..."}.
+The english_query value must be non-empty and use lowercase except proper nouns if needed."""
+
 _SYSTEM_PROMPT = """You parse meal descriptions into strict JSON only (no markdown, no prose).
 Input may be in Hebrew, English, or other languages — understand semantics, respond in the same JSON shape.
 Infer a realistic meal total from the description (e.g. "falafel" implies a typical portion, not 1 chickpea).
@@ -302,6 +307,70 @@ def _parse_json_payload(raw: str) -> dict[str, Any]:
         if nested is not None:
             return nested
         raise ValueError(f"Model output is not valid JSON: {raw[:800]!r}")
+
+
+async def food_query_from_phrase_llm(phrase: str) -> str:
+    """Map a free-text food phrase (e.g. Hebrew) to one English query string for `resolve_food_row`."""
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is not set; cannot translate food phrase without LLM")
+
+    model = os.environ.get("OPENROUTER_MODEL", "openai/gpt-5.4-mini")
+    referer = os.environ.get("OPENROUTER_HTTP_REFERER", "https://github.com/hybrid-calorie-app")
+    app_name = os.environ.get("OPENROUTER_APP_NAME", "Hybrid Calorie App")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": referer,
+        "X-Title": app_name,
+    }
+    max_tokens = int(os.environ.get("OPENROUTER_FOOD_QUERY_MAX_TOKENS", "256"))
+    if max_tokens < 64:
+        max_tokens = 64
+
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _FOOD_QUERY_SYSTEM_PROMPT},
+            {"role": "user", "content": phrase.strip()},
+        ],
+        "temperature": 0.1,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            r = await client.post(OPENROUTER_URL, headers=headers, json=body)
+            r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        msg = _openrouter_http_error_message(e.response)
+        raise RuntimeError(
+            f"OpenRouter HTTP {e.response.status_code}: {msg}. "
+            "Check OPENROUTER_API_KEY, credits, and OPENROUTER_MODEL."
+        ) from e
+    except httpx.RequestError as e:
+        raise RuntimeError(f"OpenRouter request failed (network): {e}") from e
+
+    try:
+        data = r.json()
+        choice0 = data["choices"][0]
+        message = choice0["message"]
+    except (KeyError, IndexError, TypeError) as e:
+        raise ValueError(f"Unexpected OpenRouter response: {data!r}") from e
+    if not isinstance(message, dict):
+        raise ValueError(f"Unexpected OpenRouter message shape: {message!r}")
+
+    text_out = _extract_llm_reply_text(message, choice0.get("finish_reason"))
+    parsed = _parse_json_payload(text_out)
+    raw_q = parsed.get("english_query")
+    if not isinstance(raw_q, str):
+        raise ValueError(f"LLM JSON missing string english_query, got {raw_q!r}")
+    q = " ".join(raw_q.strip().split())
+    if not q:
+        raise ValueError("LLM JSON english_query is empty")
+    return q
 
 
 async def parse_meal_with_llm(text: str) -> dict[str, Any]:

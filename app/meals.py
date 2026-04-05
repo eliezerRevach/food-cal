@@ -24,6 +24,7 @@ from app.nutrition import kcal_and_protein
 from app.portion_yield import effective_grams
 from app.debug_agent_log import agent_log
 from app.parse_local import meal_needs_estimate_heuristic, parse_local_meal
+from app.resolve_structured import resolve_item_for_db
 
 _DATE_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -271,11 +272,12 @@ async def log_meal(text: str, date_iso: str, *, llm_fallback: bool = True) -> di
     resolved: list[tuple[float, str, sqlite3.Row]] = []
 
     if local is not None:
-        for grams, name in local:
-            row = await resolve_food_row(conn, name)
-            if row is None:
+        for grams, raw_item in local:
+            pair = await resolve_item_for_db(conn, raw_item)
+            if pair is None:
                 break
-            resolved.append((grams, name, row))
+            english_query, row = pair
+            resolved.append((grams, english_query, row))
         else:
             return _persist_structured_entry(conn, date_iso, text, resolved)
 

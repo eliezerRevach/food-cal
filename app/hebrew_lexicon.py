@@ -39,6 +39,11 @@ _LATIN = re.compile(r"[A-Za-z]")
 _COUNTED_LATIN_BARE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s+([A-Za-z][A-Za-z\-]*)\s*$")
 # USDA FDC-style one-line descriptions (autocomplete); excludes gram amounts and Hebrew.
 _HEBREW_SCRIPT = re.compile(r"[\u0590-\u05FF]")
+
+
+def contains_hebrew_script(text: str) -> bool:
+    """True if the string contains Hebrew letters (used to route phrase → English lookup)."""
+    return _HEBREW_SCRIPT.search(text) is not None
 _GRAM_SUFFIX_EN = re.compile(r"\d+(?:\.\d+)?\s*[gG]")
 _GRAM_HE = re.compile(r"גרם")
 # Allowed chars for a Latin FDC description line (commas inside the name).

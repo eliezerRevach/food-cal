@@ -33,12 +33,27 @@ def test_plain_structured_does_not_trigger_heuristic() -> None:
 
 def test_hebrew_grams_parse() -> None:
     out = parse_local_meal("100 גרם סלמון")
-    assert out == [(100.0, "salmon")]
+    assert out == [(100.0, "סלמון")]
 
 
-def test_hebrew_grams_apple_alias() -> None:
+def test_hebrew_grams_apple_returns_phrase_only() -> None:
     out = parse_local_meal("150 גרם תפוח")
-    assert out == [(150.0, "apple")]
+    assert out == [(150.0, "תפוח")]
+
+
+def test_hebrew_rtl_grams_smoked_salmon() -> None:
+    out = parse_local_meal("סלמון מעושן 20 גרם")
+    assert out == [(20.0, "סלמון מעושן")]
+
+
+def test_hebrew_grams_smoked_salmon_not_collapsed_to_salmon() -> None:
+    out = parse_local_meal("20 גרם סלמון מעושן")
+    assert out == [(20.0, "סלמון מעושן")]
+
+
+def test_latin_rtl_chicken_breast() -> None:
+    out = parse_local_meal("chicken breast 200g")
+    assert out == [(200.0, "chicken breast")]
 
 
 def test_hebrew_oven_triggers_estimate() -> None:
