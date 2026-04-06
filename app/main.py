@@ -95,10 +95,16 @@ async def get_food_suggest(q: str = "", limit: int = 12) -> FoodSuggestResponse:
     return FoodSuggestResponse(suggestions=suggestions, usda_enabled=enabled)
 
 
+import os as _os
+
+_extra_origin = _os.environ.get("CORS_ORIGIN", "").strip()
+_allowed_origins = [_extra_origin] if _extra_origin else []
+
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=_allowed_origins,
     # IPv6 loopback ([::1]) is common when the dev server is opened as localhost.
-    allow_origin_regex=r"http://(\[::1\]|127\.0\.0\.1|localhost)(:\d+)?$",
+    allow_origin_regex=r"https?://(\[::1\]|127\.0\.0\.1|localhost)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

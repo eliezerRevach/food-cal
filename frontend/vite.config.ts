@@ -7,7 +7,8 @@ import react from '@vitejs/plugin-react'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  base: command === 'build' ? '/food-cal/' : '/',
   server: {
     proxy: {
       // Same-origin requests from the Vite dev server avoid browser CORS/mixed-origin issues.
@@ -28,16 +29,12 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      // Alias @ to the src directory
       '@': path.resolve(__dirname, './src'),
     },
   },
-
-  // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
-
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
   },
-})
+}))

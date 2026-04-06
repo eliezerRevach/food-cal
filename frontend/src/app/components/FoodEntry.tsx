@@ -1,7 +1,7 @@
 import { Trash2, Apple, Save } from 'lucide-react';
+import { motion } from 'motion/react';
 import { toast } from 'sonner';
 import { Button } from './ui/button';
-import { Card } from './ui/card';
 import { FoodEntry as FoodEntryType, APP_TIME_ZONE } from '../utils/foodData';
 import { saveManualPreset } from '../utils/manualPresets';
 
@@ -12,20 +12,15 @@ interface FoodEntryProps {
 
 export function FoodEntry({ entry, onDelete }: FoodEntryProps) {
   const time = new Date(entry.timestamp).toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZone: APP_TIME_ZONE,
+    hour: 'numeric', minute: '2-digit', timeZone: APP_TIME_ZONE,
   });
 
   const gramsKnown = entry.gramsTotal != null;
   const gramsTitle = !gramsKnown
     ? 'No gram amounts stored for this meal'
-    : entry.gramsPartial
-      ? 'Some items have no gram amount; total is incomplete'
-      : undefined;
+    : entry.gramsPartial ? 'Some items have no gram amount; total is incomplete' : undefined;
 
-  const savePresetDisabledTitle =
-    'Weight (grams) is required to save this meal as a reusable preset';
+  const savePresetDisabledTitle = 'Weight (grams) is required to save this meal as a reusable preset';
 
   const handleSavePreset = () => {
     if (!gramsKnown || entry.gramsTotal == null) {
@@ -46,70 +41,62 @@ export function FoodEntry({ entry, onDelete }: FoodEntryProps) {
   };
 
   return (
-    <Card className="p-4 hover:shadow-md transition-shadow">
-      <div className="flex items-start gap-3">
-        <div className="mt-1 p-2 bg-green-100 rounded-lg">
-          <Apple className="size-5 text-green-700" />
+    <motion.div
+      whileHover={{ y: -2 }}
+      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+      className="bg-white/5 backdrop-blur-sm rounded-2xl border border-white/10 overflow-hidden hover:bg-white/8 transition-colors"
+    >
+      <div className="h-0.5 w-full bg-gradient-to-r from-orange-500 via-rose-500 to-pink-500" />
+
+      <div className="p-4 flex items-start gap-3">
+        <div className="mt-0.5 w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center shrink-0 shadow-lg shadow-emerald-900/30">
+          <Apple className="size-4 text-white" />
         </div>
-        
+
         <div className="flex-1 min-w-0">
-          <h3 className="font-medium truncate">{entry.name}</h3>
-          <p className="text-sm text-muted-foreground">{time}</p>
-          
-          <div className="flex flex-wrap gap-4 mt-2">
-            <div className="flex flex-col min-w-[4.5rem]">
-              <span className="text-xs text-muted-foreground">Calories</span>
-              <span className="text-sm font-semibold text-orange-600">{entry.calories} kcal</span>
-            </div>
-            <div className="flex flex-col min-w-[4.5rem]">
-              <span className="text-xs text-muted-foreground">Protein</span>
-              <span className="text-sm font-semibold text-blue-600">{entry.protein}g</span>
-            </div>
-            <div className="flex flex-col min-w-[4.5rem]" title={gramsTitle}>
-              <span className="text-xs text-muted-foreground">Grams</span>
-              <span className="text-sm font-semibold text-emerald-700">
-                {gramsKnown ? (
-                  <>
-                    {entry.gramsTotal} g
-                    {entry.gramsPartial ? (
-                      <span className="text-muted-foreground font-normal" aria-hidden>
-                        {' '}
-                        *
-                      </span>
-                    ) : null}
-                  </>
-                ) : (
-                  <span className="text-muted-foreground font-normal">—</span>
-                )}
+          <div className="flex items-start justify-between gap-2 mb-2.5">
+            <h3 className="font-bold text-white leading-tight">{entry.name}</h3>
+            <span className="text-xs text-slate-600 shrink-0 mt-0.5 tabular-nums">{time}</span>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-orange-500/15 text-orange-400 text-xs font-bold border border-orange-500/20">
+              🔥 {entry.calories} kcal
+            </span>
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-500/15 text-blue-400 text-xs font-bold border border-blue-500/20">
+              💪 {entry.protein}g protein
+            </span>
+            {gramsKnown && (
+              <span title={gramsTitle}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/5 text-slate-400 text-xs font-semibold border border-white/10">
+                ⚖️ {entry.gramsTotal}g
+                {entry.gramsPartial && <span className="text-slate-600 font-normal" aria-hidden> *</span>}
               </span>
-            </div>
+            )}
           </div>
         </div>
-        
-        <div className="flex shrink-0 flex-col gap-1">
+
+        <div className="flex shrink-0 flex-col gap-1 -mt-0.5 -mr-1">
           <Button
-            variant="ghost"
-            size="icon"
+            variant="ghost" size="icon"
             onClick={() => onDelete(entry.id)}
-            className="text-destructive hover:text-destructive"
             aria-label="Delete entry"
+            className="text-slate-700 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition-colors"
           >
             <Trash2 className="size-4" />
           </Button>
           <Button
-            type="button"
-            variant="ghost"
-            size="icon"
+            type="button" variant="ghost" size="icon"
             onClick={handleSavePreset}
             disabled={!gramsKnown}
-            title={!gramsKnown ? savePresetDisabledTitle : undefined}
-            className="text-teal-700 hover:text-teal-800 dark:text-teal-400 dark:hover:text-teal-300"
+            title={!gramsKnown ? savePresetDisabledTitle : 'Save as preset'}
             aria-label={gramsKnown ? 'Save as preset' : savePresetDisabledTitle}
+            className="text-slate-700 hover:text-teal-400 hover:bg-teal-500/10 rounded-xl transition-colors disabled:opacity-30"
           >
             <Save className="size-4" />
           </Button>
         </div>
       </div>
-    </Card>
+    </motion.div>
   );
 }

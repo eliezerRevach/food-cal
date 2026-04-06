@@ -51,11 +51,8 @@ export function getApiBaseUrl(): string {
   if (typeof v === 'string' && v.length > 0) {
     return v.replace(/\/$/, '');
   }
-  // Dev: use relative URLs so Vite proxies to FastAPI (see vite.config.ts server.proxy).
-  if (import.meta.env.DEV) {
-    return '';
-  }
-  return 'http://127.0.0.1:8000';
+  // Use relative URLs — in dev Vite proxies them, in prod API calls fail gracefully to offline mode.
+  return '';
 }
 
 function formatApiError(status: number, body: string): string {
@@ -92,9 +89,6 @@ export async function logMealToBackend(
   }
   if (!res.ok) {
     const errText = await res.text();
-    // #region agent log
-    fetch('http://127.0.0.1:7473/ingest/4471e92a-deb6-43c4-9671-85467c465a8c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'fcca48'},body:JSON.stringify({sessionId:'fcca48',location:'api.ts:logMealToBackend',message:'log-meal non-OK',data:{status:res.status,bodyPreview:errText.slice(0,400)},timestamp:Date.now(),hypothesisId:'H3',runId:'pre'})}).catch(()=>{});
-    // #endregion
     throw new ApiError(formatApiError(res.status, errText), res.status);
   }
   return res.json() as Promise<LogMealResponse>;
