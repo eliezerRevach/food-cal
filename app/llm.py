@@ -39,10 +39,10 @@ Preserve cooking state and modifiers (e.g. smoked, grilled, canned), species, an
 Respond with strict JSON only, no markdown: {"english_query": "..."}.
 The english_query value must be non-empty and use lowercase except proper nouns if needed."""
 
-_SYSTEM_PROMPT = """You parse meal descriptions into strict JSON only (no markdown, no prose).
-Input may be in Hebrew, English, or other languages — understand semantics, respond in the same JSON shape.
-Infer a realistic meal total from the description (e.g. "falafel" implies a typical portion, not 1 chickpea).
-The user may give vague restaurant-style text. Respond with JSON matching this shape:
+_SYSTEM_PROMPT = """Parse one meal description into JSON only.
+Input may be in Hebrew, English, or another language.
+Infer realistic portions for the full meal, not literal tiny ingredients.
+Return:
 {
   "items": [ {"food": string, "grams": number } ],
   "estimate_type": "exact" | "estimated" | "range",
@@ -51,12 +51,13 @@ The user may give vague restaurant-style text. Respond with JSON matching this s
   "calories_high": number,
   "total_protein_g": number
 }
-Use estimate_type "range" for restaurant or uncertain portions. calories_low/high bound plausible totals.
-total_protein_g is your best estimate of total dietary protein for the whole meal in grams.
-For bone-in cuts (e.g. wings, drumsticks, whole fish with bones), put edible meat grams in each item's "grams" field — exclude non-edible bone weight so grams align with calories and protein for that line.
-For a typical Israeli full serving (e.g. shawarma in laffa with fries inside), treat calories_likely as roughly 900–1300 kcal and total_protein_g around 40–60 unless the user clearly indicates a snack or half portion.
-Include all JSON keys even if uncertain; guess grams, calories, and protein responsibly.
-Reply with JSON only — no prose before or after the object."""
+Rules:
+- Always include all keys.
+- Use "range" for restaurant meals or uncertain portions.
+- calories_low/high must bound a plausible total.
+- total_protein_g is the best estimate for the whole meal.
+- For bone-in foods, item grams must mean edible meat only.
+- For a typical Israeli full serving like shawarma in laffa with fries inside, assume about 900-1300 kcal and 40-60g protein unless the user clearly says it is smaller."""
 
 _SANITY_SYSTEM_PROMPT = """You are a nutrition sanity checker for a calorie app.
 Given one food query, a candidate deterministic result, and an optional baseline reference,
