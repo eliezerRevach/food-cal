@@ -70,6 +70,64 @@ export function parseFoodInput(input: string): Partial<FoodEntry> | null {
   return null;
 }
 
+/** Dates the user explicitly added to History (empty days for backfill). */
+const HISTORY_PINS_KEY = 'foodcal_history_pins';
+
+const ISO_DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function readHistoryPinsRaw(): string[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_PINS_KEY);
+    if (!raw) return [];
+    const v = JSON.parse(raw) as unknown;
+    if (!Array.isArray(v)) return [];
+    return v.filter((x): x is string => typeof x === 'string' && ISO_DATE_KEY_RE.test(x.trim()));
+  } catch {
+    return [];
+  }
+}
+
+function writeHistoryPinsSorted(dates: Iterable<string>): void {
+  try {
+    const unique = [...new Set([...dates].map((d) => d.trim()).filter((d) => ISO_DATE_KEY_RE.test(d)))].sort();
+    localStorage.setItem(HISTORY_PINS_KEY, JSON.stringify(unique));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+/** Calendar dates (YYYY-MM-DD) pinned for History list even with zero meals. */
+export function getHistoryPinDates(): Set<string> {
+  return new Set(readHistoryPinsRaw());
+}
+
+export function addHistoryPinDate(iso: string): void {
+  const s = iso.trim();
+  if (!ISO_DATE_KEY_RE.test(s)) return;
+  const pins = getHistoryPinDates();
+  pins.add(s);
+  writeHistoryPinsSorted(pins);
+}
+
+export function removeHistoryPinDates(...isos: string[]): void {
+  if (isos.length === 0) return;
+  const pins = getHistoryPinDates();
+  for (const d of isos) {
+    pins.delete(d.trim());
+  }
+  writeHistoryPinsSorted(pins);
+}
+
+/** Union backup `history_pins` into stored pins (import). */
+export function mergeHistoryPinsFromBackup(dates: unknown): void {
+  if (!Array.isArray(dates)) return;
+  const pins = getHistoryPinDates();
+  for (const d of dates) {
+    if (typeof d === 'string' && ISO_DATE_KEY_RE.test(d.trim())) pins.add(d.trim());
+  }
+  writeHistoryPinsSorted(pins);
+}
+
 /** Browser-only rows when the API is unreachable (not stored in SQLite). */
 const OFFLINE_STORAGE_KEY = 'food_tracker_offline';
 

@@ -352,53 +352,81 @@ async def test_structured_hebrew_salmon_lexicon_no_food_query_llm(
     assert log_r.status_code == 200, log_r.text
     logged = log_r.json()
     assert logged.get("estimate_type") is None
-    assert logged["items"][0]["label"] == "salmon"
+    assert logged["items"][0]["label"] == "סלמון"
     assert logged["total_calories"] == pytest.approx(206.0, abs=0.5)
 
 
-async def test_structured_hebrew_smoked_salmon_uses_food_query_llm(
+async def test_structured_hebrew_unknown_falls_through_to_meal_llm_with_original_text(
     client,
     today_iso: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Unknown Hebrew phrase → food_query_from_phrase_llm → English lookup; meal LLM must not run."""
+    """Unknown Hebrew phrase → no DB resolve → meal LLM receives exact user Hebrew string."""
 
-    async def boom_meal(_text: str) -> dict:
-        raise AssertionError("parse_meal_with_llm must not run for structured grams + LLM food query")
+    meal_text: list[str] = []
 
-    async def fake_food_query(phrase: str) -> str:
-        assert "מעושן" in phrase
-        return "smoked salmon"
-
-    async def fake_lookup(query: str) -> FoodLookupResult | None:
-        q = query.lower().strip()
-        canned = {
-            "salmon": FoodLookupResult(206.0, 22.0, 150.0, "protein"),
-            "smoked salmon": FoodLookupResult(150.0, 21.0, 150.0, "protein"),
-            "chicken breast": FoodLookupResult(165.0, 31.0, 150.0, "protein"),
-            "rice": FoodLookupResult(130.0, 2.7, 150.0, "grain"),
-            "apple": FoodLookupResult(52.0, 0.3, 185.0, "fruit"),
-            "banana": FoodLookupResult(89.0, 1.1, 120.0, "fruit"),
-            "tomato": FoodLookupResult(18.0, 0.9, 123.0, "vegetable"),
-            "chicken wings": FoodLookupResult(165.0, 31.0, 150.0, "protein"),
+    async def capture_meal(text: str) -> dict:
+        meal_text.append(text)
+        return {
+            "items": [{"food": "סלמון מעושן", "grams": 20}],
+            "estimate_type": "estimated",
+            "calories_likely": 30.0,
+            "calories_low": 25.0,
+            "calories_high": 35.0,
+            "total_protein_g": 4.0,
         }
-        return canned.get(q)
 
-    monkeypatch.setattr("app.llm.parse_meal_with_llm", boom_meal)
-    monkeypatch.setattr("app.llm.food_query_from_phrase_llm", fake_food_query)
-    monkeypatch.setattr("app.off_foods.lookup_food", fake_lookup)
+    async def boom_food_query(_phrase: str) -> str:
+        raise AssertionError("food_query_from_phrase_llm must not run")
 
+    monkeypatch.setattr("app.llm.parse_meal_with_llm", capture_meal)
+    monkeypatch.setattr("app.llm.food_query_from_phrase_llm", boom_food_query)
+
+    hebrew_input = "20 גרם סלמון מעושן"
     log_r = await client.post(
         "/log-meal",
-        json={"text": "20 גרם סלמון מעושן", "date": today_iso},
+        json={"text": hebrew_input, "date": today_iso},
     )
     assert log_r.status_code == 200, log_r.text
+    assert meal_text == [hebrew_input]
     logged = log_r.json()
-    assert logged.get("estimate_type") is None
-    assert logged["items"][0]["label"] == "smoked salmon"
-    assert logged["items"][0]["grams"] == pytest.approx(20.0)
-    assert logged["total_calories"] == pytest.approx(30.0, abs=0.2)
-    assert logged["total_protein_g"] == pytest.approx(4.2, abs=0.05)
+    assert logged.get("estimate_type") == "estimated"
+    assert logged["items"][0]["label"] == "סלמון מעושן"
+
+
+async def test_meal_llm_receives_original_hebrew_when_bare_db_misses(
+    client,
+    today_iso: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bare unknown Hebrew (not in lexicon) → parse_meal_with_llm gets original text."""
+
+    meal_text: list[str] = []
+
+    async def capture_meal(text: str) -> dict:
+        meal_text.append(text)
+        return {
+            "items": [{"food": "שווארמה בפיתה", "grams": 350}],
+            "estimate_type": "range",
+            "calories_likely": 800,
+            "calories_low": 650,
+            "calories_high": 950,
+            "total_protein_g": 45.0,
+        }
+
+    async def boom_food_query(_phrase: str) -> str:
+        raise AssertionError("food_query_from_phrase_llm must not run")
+
+    monkeypatch.setattr("app.llm.parse_meal_with_llm", capture_meal)
+    monkeypatch.setattr("app.llm.food_query_from_phrase_llm", boom_food_query)
+
+    hebrew_input = "שווארמה בפיתה"
+    log_r = await client.post(
+        "/log-meal",
+        json={"text": hebrew_input, "date": today_iso},
+    )
+    assert log_r.status_code == 200, log_r.text
+    assert meal_text == [hebrew_input]
 
 
 async def test_hebrew_bare_apple_resolves_without_llm(
@@ -420,6 +448,7 @@ async def test_hebrew_bare_apple_resolves_without_llm(
     assert log_r.status_code == 200, log_r.text
     logged = log_r.json()
     assert logged.get("estimate_type") is None
+    assert logged["items"][0]["label"] == "תפוח"
     assert "total_protein_g" in logged
     # Bare apple: `fruit` category default 185 g × stub 52 kcal/100g
     assert logged["total_calories"] == 96.2

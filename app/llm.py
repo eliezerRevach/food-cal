@@ -53,6 +53,7 @@ Return:
 }
 Rules:
 - Always include all keys.
+- When the user message is primarily Hebrew, use Hebrew strings in items[].food.
 - Use "range" for restaurant meals or uncertain portions.
 - calories_low/high must bound a plausible total.
 - total_protein_g is the best estimate for the whole meal.

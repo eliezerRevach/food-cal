@@ -1,7 +1,8 @@
-"""Hebrew food phrases → English canonical name for DB lookup (avoids LLM for simple logs).
+"""Hebrew food phrases → English canonical name for DB lookup (lexicon only, no LLM translation).
 
-Structured lines like `100 גרם תפוח` still use user-provided grams via parse_local. Bare Hebrew/English
-uses `foods` row (from USDA/OFF) and `food_servings.bare_serving_grams` for bare portions.
+Structured lines like `100 גרם תפוח` still use user-provided grams via parse_local. Unknown Hebrew
+phrases fall through to meal LLM with the user's original text. Bare Hebrew/English uses `foods`
+rows (from USDA/OFF) and `food_servings.bare_serving_grams` for bare portions.
 """
 
 from __future__ import annotations
