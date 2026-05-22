@@ -19,6 +19,7 @@ from app.hebrew_lexicon import (
     english_counted_bare_query,
     english_food_query_for_hebrew_bare,
     fdc_style_single_food_query,
+    normalize_food_input,
 )
 from app.nutrition import kcal_and_protein
 from app.portion_yield import effective_grams
@@ -274,11 +275,11 @@ async def log_meal(text: str, date_iso: str, *, llm_fallback: bool = True) -> di
 
     if local is not None:
         for grams, raw_item in local:
-            pair = await resolve_item_for_db(conn, raw_item)
-            if pair is None:
+            triple = await resolve_item_for_db(conn, raw_item)
+            if triple is None:
                 break
-            english_query, row = pair
-            resolved.append((grams, english_query, row))
+            display_label, _lookup_query, row = triple
+            resolved.append((grams, display_label, row))
         else:
             return _persist_structured_entry(conn, date_iso, text, resolved)
 
@@ -289,7 +290,8 @@ async def log_meal(text: str, date_iso: str, *, llm_fallback: bool = True) -> di
             if row is not None:
                 grams_bare = _bare_serving_with_baseline(conn, en_query, row)
                 if grams_bare is not None:
-                    bare_resolved = [(grams_bare, en_query, row)]
+                    he_label = normalize_food_input(text)
+                    bare_resolved = [(grams_bare, he_label, row)]
                     return _persist_structured_entry(conn, date_iso, text, bare_resolved)
         bare_en = english_bare_query_name(text)
         if bare_en is not None:

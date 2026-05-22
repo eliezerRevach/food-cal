@@ -1,4 +1,4 @@
-"""resolve_item_for_db: lexicon, Latin, and Hebrew + LLM query paths."""
+"""resolve_item_for_db: lexicon and Latin DB paths (no LLM translation)."""
 
 from __future__ import annotations
 
@@ -24,36 +24,23 @@ async def test_resolve_exact_hebrew_lexicon_calls_lookup_with_english(
     conn = db.get_connection()
     out = await resolve_item_for_db(conn, "סלמון")
     assert out is not None
-    en, row = out
-    assert en == "salmon"
+    display, lookup, row = out
+    assert display == "סלמון"
+    assert lookup == "salmon"
     assert float(row["kcal_per_100g"]) == 206.0
     assert seen == ["salmon"]
 
 
-async def test_resolve_hebrew_unknown_uses_food_query_llm_then_lookup(
+async def test_resolve_hebrew_unknown_returns_none_without_food_query_llm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_food_query(phrase: str) -> str:
-        assert phrase == "סלמון מעושן"
-        return "smoked salmon"
+    async def boom_food_query(_phrase: str) -> str:
+        raise AssertionError("food_query_from_phrase_llm must not run")
 
-    seen: list[str] = []
-
-    async def fake_lookup(q: str) -> FoodLookupResult | None:
-        seen.append(q)
-        if q.lower() == "smoked salmon":
-            return FoodLookupResult(150.0, 21.0, 150.0, "protein")
-        return None
-
-    monkeypatch.setattr("app.llm.food_query_from_phrase_llm", fake_food_query)
-    monkeypatch.setattr("app.off_foods.lookup_food", fake_lookup)
+    monkeypatch.setattr("app.llm.food_query_from_phrase_llm", boom_food_query)
     conn = db.get_connection()
     out = await resolve_item_for_db(conn, "סלמון מעושן")
-    assert out is not None
-    en, row = out
-    assert en == "smoked salmon"
-    assert float(row["kcal_per_100g"]) == 150.0
-    assert seen == ["smoked salmon"]
+    assert out is None
 
 
 async def test_resolve_latin_phrase_direct_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -66,15 +53,6 @@ async def test_resolve_latin_phrase_direct_lookup(monkeypatch: pytest.MonkeyPatc
     conn = db.get_connection()
     out = await resolve_item_for_db(conn, "chicken breast")
     assert out is not None
-    en, _row = out
-    assert en == "chicken breast"
-
-
-async def test_resolve_hebrew_llm_failure_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def boom_food_query(_phrase: str) -> str:
-        raise RuntimeError("network")
-
-    monkeypatch.setattr("app.llm.food_query_from_phrase_llm", boom_food_query)
-    conn = db.get_connection()
-    out = await resolve_item_for_db(conn, "סלמון מעושן")
-    assert out is None
+    display, lookup, _row = out
+    assert display == "chicken breast"
+    assert lookup == "chicken breast"

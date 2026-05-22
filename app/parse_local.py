@@ -58,7 +58,7 @@ def parse_local_meal(text: str) -> list[tuple[float, str]] | None:
     """Return list of (grams, raw_item) or None if text is not fully structured.
 
     `raw_item` is the food phrase only (no grams). Hebrew is not translated here — use
-    :func:`resolve_item_for_db` for lexicon / LLM / DB resolution.
+    :func:`resolve_item_for_db` for lexicon-only DB resolution (unknown Hebrew → meal LLM).
     """
     t = " ".join(text.strip().split())
     if not t:

@@ -2,7 +2,8 @@
 $ErrorActionPreference = "Continue"
 $Port = 8000
 
-Set-Location $PSScriptRoot
+$ProjectRoot = Split-Path $PSScriptRoot -Parent
+Set-Location $ProjectRoot
 
 function Get-NetstatListenerPids([int] $listenPort) {
     $pids = @()
