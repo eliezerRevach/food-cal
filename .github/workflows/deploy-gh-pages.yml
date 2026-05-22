@@ -39,7 +39,7 @@ jobs:
         env:
           # Project site: https://<user>.github.io/food-cal/
           VITE_BASE: /food-cal/
-          # Optional: set repo secret VITE_API_BASE_URL when backend is hosted elsewhere
+          # Omit or delete repo secret VITE_API_BASE_URL unless it is a public https API URL.
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
         run: npm run build
 

@@ -51,11 +51,9 @@ export function getApiBaseUrl(): string {
   if (typeof v === 'string' && v.length > 0) {
     return v.replace(/\/$/, '');
   }
-  // Dev: use relative URLs so Vite proxies to FastAPI (see vite.config.ts server.proxy).
-  if (import.meta.env.DEV) {
-    return '';
-  }
-  return 'http://127.0.0.1:8000';
+  // Relative URLs: Vite dev proxies to FastAPI (vite.config.ts). On static hosts without
+  // VITE_API_BASE_URL, calls fail gracefully and the UI falls back to offline data.
+  return '';
 }
 
 function formatApiError(status: number, body: string): string {
