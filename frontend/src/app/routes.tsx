@@ -4,7 +4,10 @@ import DailyLog from "./pages/DailyLog";
 import History from "./pages/History";
 import Summary from "./pages/Summary";
 
-export const router = createBrowserRouter([
+const basename = import.meta.env.BASE_URL.replace(/\/$/, "") || undefined;
+
+export const router = createBrowserRouter(
+  [
   {
     path: "/",
     Component: Dashboard,
@@ -21,4 +24,6 @@ export const router = createBrowserRouter([
     path: "/summary",
     Component: Summary,
   },
-]);
+  ],
+  { basename },
+);

@@ -7,7 +7,11 @@ import react from '@vitejs/plugin-react'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+// VITE_BASE=/food-cal/ for GitHub Pages project site; omit (or /) for local dev.
+const base = process.env.VITE_BASE ?? '/'
+
 export default defineConfig({
+  base,
   server: {
     proxy: {
       // Same-origin requests from the Vite dev server avoid browser CORS/mixed-origin issues.
