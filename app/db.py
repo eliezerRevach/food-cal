@@ -105,6 +105,37 @@ def _migrate_entries(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE entries ADD COLUMN created_at TEXT")
 
 
+def _migrate_recipes(conn: sqlite3.Connection) -> None:
+    """Ensure recipes tables exist (for DBs created before this feature)."""
+    cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='recipes'")
+    if cur.fetchone() is not None:
+        return
+    conn.executescript(
+        """
+        CREATE TABLE recipes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            batch_grams REAL NOT NULL,
+            total_calories REAL NOT NULL,
+            total_protein_g REAL NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE recipe_ingredients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipe_id INTEGER NOT NULL,
+            sort_order INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            grams REAL NOT NULL,
+            calories REAL NOT NULL,
+            protein_g REAL NOT NULL,
+            FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
+        );
+        """
+    )
+
+
 def _migrate_meal_log_jobs(conn: sqlite3.Connection) -> None:
     """Ensure meal_log_jobs table exists (for DBs created before this feature)."""
     cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='meal_log_jobs'")
@@ -189,12 +220,34 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL,
             FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE SET NULL
         );
+
+        CREATE TABLE IF NOT EXISTS recipes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            batch_grams REAL NOT NULL,
+            total_calories REAL NOT NULL,
+            total_protein_g REAL NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS recipe_ingredients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipe_id INTEGER NOT NULL,
+            sort_order INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            grams REAL NOT NULL,
+            calories REAL NOT NULL,
+            protein_g REAL NOT NULL,
+            FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
+        );
         """
     )
     _migrate_foods(conn)
     _migrate_food_baselines(conn)
     _migrate_entries(conn)
     _migrate_meal_log_jobs(conn)
+    _migrate_recipes(conn)
 
 
 def _seed_if_empty(conn: sqlite3.Connection) -> None:

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app import db
 from app.meals import validate_date_iso
+from app.recipes import export_recipes_for_backup, import_recipes_from_backup
 
 
 BACKUP_FORMAT = "foodcal-backup"
@@ -36,12 +37,25 @@ class BackupEntryExport(BaseModel):
     items: list[BackupItemExport] = Field(default_factory=list)
 
 
+class BackupRecipeIngredientExport(BaseModel):
+    label: str
+    grams: float
+    calories: float
+    protein: float
+
+
+class BackupRecipeExport(BaseModel):
+    name: str
+    ingredients: list[BackupRecipeIngredientExport] = Field(default_factory=list)
+
+
 class BackupImportBody(BaseModel):
     format: Literal["foodcal-backup"]
     version: Literal[1]
     entries: list[BackupEntryExport]
     mode: Literal["append", "replace"] = "append"
     exported_at: str | None = None
+    recipes: list[BackupRecipeExport] | None = None
 
 
 def _utc_now_iso() -> str:
@@ -115,6 +129,7 @@ def export_backup() -> dict[str, Any]:
         "version": BACKUP_VERSION,
         "exported_at": _utc_now_iso(),
         "entries": entries_out,
+        "recipes": export_recipes_for_backup(),
     }
 
 
@@ -130,6 +145,7 @@ def _finite_nonneg(name: str, v: float | None, *, allow_none: bool = True) -> No
 def import_backup(body: BackupImportBody) -> dict[str, Any]:
     inserted_entries = 0
     inserted_items = 0
+    inserted_recipes = 0
 
     with db.transaction() as conn:
         if body.mode == "replace":
@@ -197,9 +213,28 @@ def import_backup(body: BackupImportBody) -> dict[str, Any]:
                 )
                 inserted_items += 1
 
+    if body.recipes:
+        recipe_dicts = [
+            {
+                "name": r.name,
+                "ingredients": [
+                    {
+                        "label": i.label,
+                        "grams": i.grams,
+                        "calories": i.calories,
+                        "protein": i.protein,
+                    }
+                    for i in r.ingredients
+                ],
+            }
+            for r in body.recipes
+        ]
+        inserted_recipes = import_recipes_from_backup(recipe_dicts)
+
     return {
         "status": "ok",
         "mode": body.mode,
         "inserted_entries": inserted_entries,
         "inserted_items": inserted_items,
+        "inserted_recipes": inserted_recipes,
     }

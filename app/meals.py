@@ -256,6 +256,191 @@ def log_manual_meal(
     return _fetch_entry(conn, int(eid))
 
 
+def _ingredient_dict_from_resolved(
+    conn: sqlite3.Connection,
+    resolved: list[tuple[float, str, sqlite3.Row]],
+) -> dict[str, Any]:
+    if len(resolved) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail="describe one ingredient at a time (e.g. 200g chicken breast)",
+        )
+    grams, name, food_row = resolved[0]
+    g_eff = effective_grams(conn, name, grams)
+    if g_eff is None:
+        g_eff = grams
+    k, p = kcal_and_protein(
+        g_eff,
+        float(food_row["kcal_per_100g"]),
+        float(food_row["protein_per_100g"]),
+    )
+    return {
+        "name": name,
+        "grams": round(g_eff, 2),
+        "calories": round(k, 1),
+        "protein": round(p, 2),
+    }
+
+
+async def _try_resolve_single_structured(
+    conn: sqlite3.Connection, text: str
+) -> dict[str, Any] | None:
+    """Resolve one ingredient from local/DB paths without persisting."""
+    needs_h = meal_needs_estimate_heuristic(text)
+    local = None if needs_h else parse_local_meal(text)
+    if local is not None:
+        if len(local) > 1:
+            raise HTTPException(
+                status_code=422,
+                detail="describe one ingredient at a time (e.g. 200g chicken breast)",
+            )
+        resolved: list[tuple[float, str, sqlite3.Row]] = []
+        for grams, raw_item in local:
+            triple = await resolve_item_for_db(conn, raw_item)
+            if triple is None:
+                return None
+            display_label, _lookup_query, row = triple
+            resolved.append((grams, display_label, row))
+        return _ingredient_dict_from_resolved(conn, resolved)
+
+    if meal_needs_estimate_heuristic(text):
+        return None
+
+    en_query = english_food_query_for_hebrew_bare(text)
+    if en_query:
+        row = await resolve_food_row(conn, en_query)
+        if row is not None:
+            grams_bare = _bare_serving_with_baseline(conn, en_query, row)
+            if grams_bare is not None:
+                he_label = normalize_food_input(text)
+                return _ingredient_dict_from_resolved(
+                    conn, [(grams_bare, he_label, row)]
+                )
+    bare_en = english_bare_query_name(text)
+    if bare_en is not None:
+        row = await resolve_food_row(conn, bare_en)
+        if row is not None:
+            grams_bare = _bare_serving_with_baseline(conn, bare_en, row)
+            if grams_bare is not None:
+                return _ingredient_dict_from_resolved(conn, [(grams_bare, bare_en, row)])
+    counted = english_counted_bare_query(text)
+    if counted is not None:
+        count, candidates = counted
+        for candidate in candidates:
+            row = await resolve_food_row(conn, candidate)
+            if row is None:
+                continue
+            grams_bare = _bare_serving_with_baseline(conn, candidate, row)
+            if grams_bare is None:
+                continue
+            return _ingredient_dict_from_resolved(
+                conn, [(grams_bare * count, candidate, row)]
+            )
+    fdc_q = fdc_style_single_food_query(text)
+    if fdc_q is not None:
+        row = await resolve_food_row(conn, fdc_q)
+        serving_name = fdc_q
+        if row is None:
+            head = fdc_q.split(",", 1)[0].strip()
+            if head:
+                row = await resolve_food_row(conn, head)
+                serving_name = head
+        if row is not None:
+            baseline_name = fdc_q.split(",", 1)[0].strip() if "," in fdc_q else fdc_q
+            grams_bare = _bare_serving_with_baseline(conn, baseline_name, row)
+            if grams_bare is not None:
+                return _ingredient_dict_from_resolved(
+                    conn, [(grams_bare, fdc_q, row)]
+                )
+    return None
+
+
+async def _ingredient_from_llm(
+    conn: sqlite3.Connection, text: str, llm_data: dict[str, Any]
+) -> dict[str, Any]:
+    raw_items = [it for it in (llm_data.get("items") or []) if isinstance(it, dict)]
+    if len(raw_items) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail="describe one ingredient at a time; the parser returned multiple items",
+        )
+    it = raw_items[0]
+    label = str(it.get("food", "")).strip() or "unknown"
+    g = it.get("grams")
+    try:
+        grams_f = float(g) if g is not None else None
+    except (TypeError, ValueError):
+        grams_f = None
+    if grams_f is None or not math.isfinite(grams_f) or grams_f <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail="could not determine grams for this ingredient; include a weight (e.g. 200g)",
+        )
+    grams_f = effective_grams(conn, label, grams_f)
+    if grams_f is None or grams_f <= 0:
+        raise HTTPException(status_code=422, detail="invalid grams for ingredient")
+
+    row = await resolve_food_row(conn, label)
+    if row is not None:
+        k, p = kcal_and_protein(
+            grams_f,
+            float(row["kcal_per_100g"]),
+            float(row["protein_per_100g"]),
+        )
+        return {
+            "name": label,
+            "grams": round(grams_f, 2),
+            "calories": round(k, 1),
+            "protein": round(p, 2),
+        }
+
+    likely = _llm_required_float("calories_likely", llm_data.get("calories_likely"))
+    prot_raw = llm_data.get("total_protein_g")
+    protein_total = (
+        _llm_required_float("total_protein_g", prot_raw) if prot_raw is not None else 0.0
+    )
+    total_g = 0.0
+    for raw in raw_items:
+        try:
+            tg = float(raw.get("grams") or 0)
+        except (TypeError, ValueError):
+            tg = 0.0
+        if math.isfinite(tg) and tg > 0:
+            total_g += tg
+    if total_g <= 0:
+        total_g = grams_f
+    ratio = grams_f / total_g
+    return {
+        "name": label,
+        "grams": round(grams_f, 2),
+        "calories": round(likely * ratio, 1),
+        "protein": round(protein_total * ratio, 2),
+    }
+
+
+async def resolve_text_to_single_ingredient(
+    text: str, *, llm_fallback: bool = True
+) -> dict[str, Any]:
+    """Parse text into one ingredient's nutrition without writing to entries."""
+    t = text.strip()
+    if not t:
+        raise HTTPException(status_code=400, detail="text is required")
+    conn = db.get_connection()
+    structured = await _try_resolve_single_structured(conn, t)
+    if structured is not None:
+        return structured
+    if not llm_fallback:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Could not resolve this ingredient from the food database. "
+                "Turn on AI assist or use structured input (e.g. 200g chicken breast)."
+            ),
+        )
+    llm_data = await llm_mod.parse_meal_with_llm(t)
+    return await _ingredient_from_llm(conn, t, llm_data)
+
+
 async def log_meal(text: str, date_iso: str, *, llm_fallback: bool = True) -> dict[str, Any]:
     conn = db.get_connection()
     needs_h = meal_needs_estimate_heuristic(text)

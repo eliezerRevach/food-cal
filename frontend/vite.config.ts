@@ -22,6 +22,9 @@ export default defineConfig({
       '/entries-rollups': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/food-suggest': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/backup': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/recipes': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/log-recipe': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/parse-ingredient': { target: 'http://127.0.0.1:8000', changeOrigin: true },
     },
   },
   plugins: [

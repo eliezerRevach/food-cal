@@ -388,3 +388,113 @@ export async function postBackupImport(
   }
   return res.json() as Promise<BackupImportResult>;
 }
+
+export type RecipeIngredient = {
+  label: string;
+  grams: number;
+  calories: number;
+  protein: number;
+};
+
+export type RecipeSummary = {
+  id: number;
+  name: string;
+  batch_grams: number;
+  total_calories: number;
+  total_protein_g: number;
+  ingredient_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RecipeDetail = RecipeSummary & {
+  ingredients: RecipeIngredient[];
+};
+
+export type ParsedIngredient = {
+  name: string;
+  grams: number;
+  calories: number;
+  protein: number;
+};
+
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const base = getApiBaseUrl();
+  try {
+    return await fetch(`${base}${path}`, init);
+  } catch (e) {
+    const msg =
+      e instanceof TypeError
+        ? `Cannot reach API at ${base}. Start from the project folder: python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`
+        : String(e);
+    throw new Error(msg);
+  }
+}
+
+async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetch(path, init);
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new ApiError(formatApiError(res.status, errText), res.status);
+  }
+  return res.json() as Promise<T>;
+}
+
+export async function fetchRecipes(): Promise<RecipeSummary[]> {
+  const data = await apiJson<{ recipes: RecipeSummary[] }>('/recipes');
+  return data.recipes ?? [];
+}
+
+export async function fetchRecipe(id: number): Promise<RecipeDetail> {
+  return apiJson<RecipeDetail>(`/recipes/${id}`);
+}
+
+export async function createRecipe(
+  name: string,
+  ingredients: RecipeIngredient[],
+): Promise<RecipeDetail> {
+  return apiJson<RecipeDetail>('/recipes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, ingredients }),
+  });
+}
+
+export async function updateRecipe(
+  id: number,
+  name: string,
+  ingredients: RecipeIngredient[],
+): Promise<RecipeDetail> {
+  return apiJson<RecipeDetail>(`/recipes/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, ingredients }),
+  });
+}
+
+export async function deleteRecipe(id: number): Promise<void> {
+  await apiJson<{ status: string }>(`/recipes/${id}`, { method: 'DELETE' });
+}
+
+export async function parseIngredient(
+  text: string,
+  llmFallback = true,
+): Promise<ParsedIngredient> {
+  return apiJson<ParsedIngredient>('/parse-ingredient', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: text.trim(), llm_fallback: llmFallback }),
+  });
+}
+
+export async function logRecipePortion(
+  date: string,
+  recipeId: number,
+  gramsEaten: number,
+): Promise<LogMealResponse> {
+  return apiJson<LogMealResponse>('/log-recipe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date, recipe_id: recipeId, grams_eaten: gramsEaten }),
+  });
+}

@@ -28,7 +28,17 @@ from app.meals import (
     list_entries_for_date,
     log_manual_meal,
     log_meal,
+    resolve_text_to_single_ingredient,
     validate_date_iso,
+)
+from app.recipes import (
+    RecipeIngredientInput,
+    create_recipe,
+    delete_recipe,
+    get_recipe,
+    list_recipes,
+    log_recipe_portion,
+    update_recipe,
 )
 import app.meal_jobs as meal_jobs
 
@@ -81,6 +91,9 @@ async def root() -> dict[str, str]:
         "food_suggest": "GET /food-suggest?q=...&limit=12",
         "backup_export": "GET /backup/export",
         "backup_import": "POST /backup/import",
+        "recipes": "GET /recipes",
+        "log_recipe": "POST /log-recipe",
+        "parse_ingredient": "POST /parse-ingredient",
     }
 
 
@@ -136,6 +149,109 @@ class LogMealManualBody(BaseModel):
     @classmethod
     def strip_name(cls, v: str) -> str:
         return v.strip()
+
+
+class RecipeIngredientBody(BaseModel):
+    label: str
+    grams: float
+    calories: float
+    protein: float
+
+    @field_validator("label")
+    @classmethod
+    def strip_label(cls, v: str) -> str:
+        return v.strip()
+
+
+class RecipeBody(BaseModel):
+    name: str
+    ingredients: list[RecipeIngredientBody]
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, v: str) -> str:
+        return v.strip()
+
+
+class LogRecipeBody(BaseModel):
+    date: str
+    recipe_id: int
+    grams_eaten: float
+
+
+class ParseIngredientBody(BaseModel):
+    text: str
+    llm_fallback: bool = True
+
+    @field_validator("text")
+    @classmethod
+    def strip_text(cls, v: str) -> str:
+        return v.strip()
+
+
+def _ingredients_from_body(body: RecipeBody) -> list[RecipeIngredientInput]:
+    return [
+        RecipeIngredientInput(i.label, i.grams, i.calories, i.protein)
+        for i in body.ingredients
+    ]
+
+
+@app.get("/recipes")
+async def get_recipes() -> dict:
+    return {"recipes": list_recipes()}
+
+
+@app.get("/recipes/{recipe_id}")
+async def get_recipe_by_id(recipe_id: int) -> dict:
+    if recipe_id < 1:
+        raise HTTPException(status_code=400, detail="invalid recipe id")
+    return get_recipe(recipe_id)
+
+
+@app.post("/recipes")
+async def post_recipe(body: RecipeBody) -> dict:
+    return create_recipe(body.name, _ingredients_from_body(body))
+
+
+@app.put("/recipes/{recipe_id}")
+async def put_recipe(recipe_id: int, body: RecipeBody) -> dict:
+    if recipe_id < 1:
+        raise HTTPException(status_code=400, detail="invalid recipe id")
+    return update_recipe(recipe_id, body.name, _ingredients_from_body(body))
+
+
+@app.delete("/recipes/{recipe_id}")
+async def remove_recipe(recipe_id: int) -> dict[str, str]:
+    if recipe_id < 1:
+        raise HTTPException(status_code=400, detail="invalid recipe id")
+    delete_recipe(recipe_id)
+    return {"status": "ok"}
+
+
+@app.post("/log-recipe")
+async def post_log_recipe(body: LogRecipeBody) -> dict:
+    if body.recipe_id < 1:
+        raise HTTPException(status_code=400, detail="invalid recipe id")
+    try:
+        return log_recipe_portion(body.date, body.recipe_id, body.grams_eaten)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/parse-ingredient")
+async def post_parse_ingredient(body: ParseIngredientBody) -> dict:
+    if not body.text:
+        raise HTTPException(status_code=400, detail="text is required")
+    try:
+        return await resolve_text_to_single_ingredient(body.text, llm_fallback=body.llm_fallback)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except HTTPException:
+        raise
 
 
 @app.post("/log-meal-manual")

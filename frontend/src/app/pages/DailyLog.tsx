@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { ArrowLeft, Calendar as CalendarIcon, Edit3, MessageSquare, Sparkles } from 'lucide-react';
+import { ArrowLeft, Calendar as CalendarIcon, ChefHat, Edit3, MessageSquare, Sparkles } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Calendar } from '../components/ui/calendar';
@@ -10,6 +10,7 @@ import { Switch } from '../components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { ChatInput } from '../components/ChatInput';
 import { ManualFoodInput, type ManualFoodFormData } from '../components/ManualFoodInput';
+import { RecipeTab } from '../components/RecipeTab';
 import { FoodEntry as FoodEntryCard } from '../components/FoodEntry';
 import { PendingFoodEntryCard } from '../components/PendingFoodEntryCard';
 import {
@@ -93,7 +94,7 @@ export default function DailyLog() {
   const pollRefs = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
 
   const [showChat, setShowChat] = useState(false);
-  const [inputMode, setInputMode] = useState<'chat' | 'manual'>('chat');
+  const [inputMode, setInputMode] = useState<'chat' | 'manual' | 'recipe'>('chat');
   const [llmFallback, setLlmFallback] = useState(() => readLlmFallbackPreference());
 
   const dateStr = formatDate(selectedDate);
@@ -258,6 +259,10 @@ export default function DailyLog() {
     }
   };
 
+  const handleRecipeLogSuccess = async () => {
+    await loadDayEntries();
+  };
+
   const handleDeleteEntry = async (entryId: string) => {
     if (entryId.startsWith('offline-')) {
       deleteOfflineFoodEntry(dateStr, entryId);
@@ -341,7 +346,7 @@ export default function DailyLog() {
         {showChat ? (
           <Tabs
             value={inputMode}
-            onValueChange={(v) => setInputMode(v as 'chat' | 'manual')}
+            onValueChange={(v) => setInputMode(v as 'chat' | 'manual' | 'recipe')}
             className="relative z-10 mb-6"
           >
             <Card className="bg-white/80 backdrop-blur">
@@ -351,18 +356,22 @@ export default function DailyLog() {
                     <CardTitle className="flex items-center gap-2">
                       {inputMode === 'chat' ? (
                         <MessageSquare className="size-5" />
-                      ) : (
+                      ) : inputMode === 'manual' ? (
                         <Edit3 className="size-5" />
+                      ) : (
+                        <ChefHat className="size-5" />
                       )}
                       Add Food
                     </CardTitle>
                     <CardDescription>
                       {inputMode === 'chat'
                         ? 'Type or speak what you ate (e.g., chicken breast, banana, oatmeal)'
-                        : 'Enter food details manually'}
+                        : inputMode === 'manual'
+                          ? 'Enter food details manually'
+                          : 'Build a composite meal or log a portion by grams'}
                     </CardDescription>
                   </div>
-                  {inputMode === 'chat' && (
+                  {(inputMode === 'chat' || inputMode === 'recipe') && (
                     <div className="flex shrink-0 items-center gap-2 rounded-lg border border-purple-200 bg-gradient-to-r from-purple-50 to-blue-50 px-3 py-2 dark:border-purple-900/50 dark:from-purple-950/40 dark:to-blue-950/40">
                       <Sparkles
                         className={`size-4 shrink-0 ${llmFallback ? 'text-purple-600 dark:text-purple-400' : 'text-muted-foreground'}`}
@@ -382,14 +391,18 @@ export default function DailyLog() {
                     </div>
                   )}
                 </div>
-                <TabsList className="grid w-full grid-cols-2">
+                <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="chat" className="gap-2">
                     <MessageSquare className="size-4" />
-                    Chat Mode
+                    Chat
                   </TabsTrigger>
                   <TabsTrigger value="manual" className="gap-2">
                     <Edit3 className="size-4" />
-                    Manual Input
+                    Manual
+                  </TabsTrigger>
+                  <TabsTrigger value="recipe" className="gap-2">
+                    <ChefHat className="size-4" />
+                    Recipe
                   </TabsTrigger>
                 </TabsList>
               </CardHeader>
@@ -410,6 +423,13 @@ export default function DailyLog() {
                 <TabsContent value="manual" className="mt-0">
                   <ManualFoodInput onSubmit={handleManualSubmit} />
                 </TabsContent>
+                <TabsContent value="recipe" className="mt-0">
+                  <RecipeTab
+                    dateStr={dateStr}
+                    llmFallback={llmFallback}
+                    onLogSuccess={handleRecipeLogSuccess}
+                  />
+                </TabsContent>
                 <Button variant="ghost" className="mt-4 w-full" onClick={() => setShowChat(false)}>
                   Cancel
                 </Button>
@@ -422,7 +442,7 @@ export default function DailyLog() {
               <MessageSquare className="mr-2 size-5" />
               Add food
             </Button>
-            <p className="text-center text-xs text-muted-foreground">Chat or manual entry</p>
+            <p className="text-center text-xs text-muted-foreground">Chat, manual, or recipe</p>
           </div>
         )}
 
