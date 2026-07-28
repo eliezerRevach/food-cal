@@ -29,7 +29,13 @@ from app.meals import (
     log_manual_meal,
     log_meal,
     resolve_text_to_single_ingredient,
+    suggest_history_foods,
     validate_date_iso,
+)
+from app.manual_presets import (
+    delete_manual_preset,
+    list_manual_presets,
+    save_manual_preset,
 )
 from app.recipes import (
     RecipeIngredientInput,
@@ -89,6 +95,8 @@ async def root() -> dict[str, str]:
         "delete_entry": "DELETE /entries/{entry_id}",
         "entries_rollups": "GET /entries-rollups?start=YYYY-MM-DD&end=YYYY-MM-DD",
         "food_suggest": "GET /food-suggest?q=...&limit=12",
+        "history_food_suggest": "GET /history-food-suggest?q=...&limit=25",
+        "manual_presets": "GET|POST /manual-presets",
         "backup_export": "GET /backup/export",
         "backup_import": "POST /backup/import",
         "recipes": "GET /recipes",
@@ -115,6 +123,54 @@ async def get_food_suggest(q: str = "", limit: int = 12) -> FoodSuggestResponse:
         return FoodSuggestResponse(suggestions=[], usda_enabled=enabled)
     suggestions = await search_food_names_usda(q, page_size=limit)
     return FoodSuggestResponse(suggestions=suggestions, usda_enabled=enabled)
+
+
+class ManualPresetBody(BaseModel):
+    name: str
+    grams: float
+    calories: float
+    protein: float
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, v: str) -> str:
+        return v.strip()
+
+
+class HistoryFoodSuggestResponse(BaseModel):
+    suggestions: list[dict]
+
+
+@app.get("/manual-presets")
+async def get_manual_presets(q: str = "", limit: int = 100) -> dict[str, list]:
+    if len(q) > 120:
+        raise HTTPException(status_code=400, detail="q must be at most 120 characters")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+    return {"presets": list_manual_presets(q=q, limit=limit)}
+
+
+@app.post("/manual-presets")
+async def post_manual_preset(body: ManualPresetBody) -> dict:
+    return save_manual_preset(body.name, body.grams, body.protein, body.calories)
+
+
+@app.delete("/manual-presets/{preset_id}")
+async def remove_manual_preset(preset_id: str) -> dict[str, str]:
+    if not delete_manual_preset(preset_id):
+        raise HTTPException(status_code=404, detail="preset not found")
+    return {"status": "ok"}
+
+
+@app.get("/history-food-suggest")
+async def get_history_food_suggest(q: str = "", limit: int = 25) -> HistoryFoodSuggestResponse:
+    """Logged meal history for autocomplete (View History data), deduped by macros."""
+    q = q.strip()
+    if len(q) > 120:
+        raise HTTPException(status_code=400, detail="q must be at most 120 characters")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+    return HistoryFoodSuggestResponse(suggestions=suggest_history_foods(q=q, limit=limit))
 
 
 app.add_middleware(

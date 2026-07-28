@@ -1,6 +1,7 @@
 /** Call FastAPI backend (hybrid DB + LLM). */
 
 const LLM_FALLBACK_STORAGE_KEY = 'foodcal-llm-fallback';
+const HISTORY_AUTOCORRECT_STORAGE_KEY = 'foodcal-history-autocorrect';
 
 export function readLlmFallbackPreference(): boolean {
   try {
@@ -15,6 +16,25 @@ export function readLlmFallbackPreference(): boolean {
 export function writeLlmFallbackPreference(enabled: boolean): void {
   try {
     localStorage.setItem(LLM_FALLBACK_STORAGE_KEY, enabled ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Default off — matches prior autocomplete (saved presets only, no history meals). */
+export function readHistoryAutocorrectPreference(): boolean {
+  try {
+    const v = localStorage.getItem(HISTORY_AUTOCORRECT_STORAGE_KEY);
+    if (v === null) return false;
+    return v === '1' || v === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function writeHistoryAutocorrectPreference(enabled: boolean): void {
+  try {
+    localStorage.setItem(HISTORY_AUTOCORRECT_STORAGE_KEY, enabled ? '1' : '0');
   } catch {
     /* ignore */
   }
@@ -84,7 +104,7 @@ export async function logMealToBackend(
   } catch (e) {
     const msg =
       e instanceof TypeError
-        ? `Cannot reach API at ${base}. Start from the project folder: python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`
+        ? `Cannot reach API at ${base}. Start from the project folder: python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8002`
         : String(e);
     throw new Error(msg);
   }
@@ -131,7 +151,7 @@ export async function enqueueLogMealJob(
   } catch (e) {
     const msg =
       e instanceof TypeError
-        ? `Cannot reach API at ${base}. Start from the project folder: python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`
+        ? `Cannot reach API at ${base}. Start from the project folder: python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8002`
         : String(e);
     throw new Error(msg);
   }
@@ -199,7 +219,7 @@ export async function logManualMealToBackend(
   } catch (e) {
     const msg =
       e instanceof TypeError
-        ? `Cannot reach API at ${base}. Start from the project folder: python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`
+        ? `Cannot reach API at ${base}. Start from the project folder: python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8002`
         : String(e);
     throw new Error(msg);
   }
@@ -323,6 +343,110 @@ export async function fetchFoodSuggestions(q: string, limit = 12): Promise<FoodS
   }
 }
 
+export type ManualPresetApiRow = {
+  id: string;
+  name: string;
+  grams: number;
+  protein: number;
+  calories: number;
+  savedAt: number;
+  updated?: boolean;
+};
+
+function normalizePresetRow(raw: unknown): ManualPresetApiRow | null {
+  if (raw === null || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (
+    typeof o.id !== 'string' ||
+    typeof o.name !== 'string' ||
+    typeof o.grams !== 'number' ||
+    typeof o.protein !== 'number' ||
+    typeof o.calories !== 'number'
+  ) {
+    return null;
+  }
+  const savedAt = typeof o.savedAt === 'number' ? o.savedAt : 0;
+  return {
+    id: o.id,
+    name: o.name,
+    grams: o.grams,
+    protein: o.protein,
+    calories: o.calories,
+    savedAt,
+    ...(typeof o.updated === 'boolean' ? { updated: o.updated } : {}),
+  };
+}
+
+export async function fetchManualPresets(limit = 100, q = ''): Promise<ManualPresetApiRow[]> {
+  const base = getApiBaseUrl();
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (q.trim()) params.set('q', q.trim());
+  const res = await fetch(`${base}/manual-presets?${params}`);
+  if (!res.ok) {
+    throw new Error(formatApiError(res.status, await res.text()));
+  }
+  const ct = res.headers.get('content-type') ?? '';
+  if (!ct.includes('application/json')) {
+    throw new Error('manual-presets returned non-JSON (is the API proxy running?)');
+  }
+  const data = (await res.json()) as { presets?: unknown };
+  if (!Array.isArray(data.presets)) return [];
+  return data.presets.map(normalizePresetRow).filter((p): p is ManualPresetApiRow => p !== null);
+}
+
+export async function saveManualPresetRemote(data: {
+  name: string;
+  grams: number;
+  protein: number;
+  calories: number;
+}): Promise<ManualPresetApiRow> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/manual-presets`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error(formatApiError(res.status, await res.text()));
+  }
+  const row = normalizePresetRow(await res.json());
+  if (!row) throw new Error('Invalid preset response');
+  return row;
+}
+
+export async function deleteManualPresetRemote(id: string): Promise<boolean> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/manual-presets/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  if (res.status === 404) return false;
+  if (!res.ok) {
+    throw new Error(formatApiError(res.status, await res.text()));
+  }
+  return true;
+}
+
+/** History meal suggestions (View History data); returns [] on error (no throw). */
+export async function fetchHistoryFoodSuggestions(
+  q = '',
+  limit = 25,
+): Promise<ManualPresetApiRow[]> {
+  const base = getApiBaseUrl();
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (q.trim()) params.set('q', q.trim());
+  try {
+    const res = await fetch(`${base}/history-food-suggest?${params}`);
+    if (!res.ok) return [];
+    const data = (await res.json()) as { suggestions?: unknown };
+    if (!Array.isArray(data.suggestions)) return [];
+    return data.suggestions
+      .map(normalizePresetRow)
+      .filter((p): p is ManualPresetApiRow => p !== null);
+  } catch {
+    return [];
+  }
+}
+
 export type BackupServerPayload = {
   format: 'foodcal-backup';
   version: 1;
@@ -337,6 +461,8 @@ export type BackupImportResult = {
   mode: string;
   inserted_entries: number;
   inserted_items: number;
+  inserted_recipes?: number;
+  inserted_manual_presets?: number;
 };
 
 export async function fetchBackupExport(): Promise<BackupServerPayload> {
@@ -425,7 +551,7 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   } catch (e) {
     const msg =
       e instanceof TypeError
-        ? `Cannot reach API at ${base}. Start from the project folder: python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`
+        ? `Cannot reach API at ${base}. Start from the project folder: python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8002`
         : String(e);
     throw new Error(msg);
   }

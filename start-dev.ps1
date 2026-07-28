@@ -1,10 +1,10 @@
-# Start full stack: stop any existing uvicorn on :8000, start one backend, run Vite in this window.
+# Start full stack: stop any existing uvicorn on :8002, start one backend, run Vite in this window.
 # On exit (or Ctrl+C), backend is stopped again so you do not accumulate duplicate servers.
 $ErrorActionPreference = "Stop"
 
 Set-Location $PSScriptRoot
 
-$Port = 8000
+$Port = 8002
 $BindHost = "127.0.0.1"
 $stopScript = Join-Path $PSScriptRoot (Join-Path "scripts" "stop-backend.ps1")
 if (-not (Test-Path $stopScript)) {

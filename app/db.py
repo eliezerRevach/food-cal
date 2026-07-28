@@ -158,6 +158,27 @@ def _migrate_meal_log_jobs(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_manual_presets(conn: sqlite3.Connection) -> None:
+    """Ensure manual_presets table exists (for DBs created before this feature)."""
+    cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='manual_presets'")
+    if cur.fetchone() is not None:
+        return
+    conn.executescript(
+        """
+        CREATE TABLE manual_presets (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            grams REAL NOT NULL,
+            protein REAL NOT NULL,
+            calories REAL NOT NULL,
+            saved_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX ux_manual_presets_sig
+            ON manual_presets (lower(name), grams, protein, calories);
+        """
+    )
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -241,6 +262,17 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             protein_g REAL NOT NULL,
             FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS manual_presets (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            grams REAL NOT NULL,
+            protein REAL NOT NULL,
+            calories REAL NOT NULL,
+            saved_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_manual_presets_sig
+            ON manual_presets (lower(name), grams, protein, calories);
         """
     )
     _migrate_foods(conn)
@@ -248,6 +280,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _migrate_entries(conn)
     _migrate_meal_log_jobs(conn)
     _migrate_recipes(conn)
+    _migrate_manual_presets(conn)
 
 
 def _seed_if_empty(conn: sqlite3.Connection) -> None:

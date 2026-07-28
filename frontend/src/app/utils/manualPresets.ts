@@ -1,4 +1,10 @@
-/** Browser-local saved manual entry presets (not synced to the server). */
+/** Server-backed manual entry presets (with one-time localStorage migration). */
+
+import {
+  deleteManualPresetRemote,
+  fetchManualPresets,
+  saveManualPresetRemote,
+} from './api';
 
 const STORAGE_KEY = 'foodcal-manual-presets';
 /** Max presets stored and max rows shown in browse-all dropdown. */
@@ -13,21 +19,15 @@ export type ManualFoodPreset = {
   savedAt: number;
 };
 
-function presetSignature(p: Pick<ManualFoodPreset, 'name' | 'grams' | 'protein' | 'calories'>): string {
+let cache: ManualFoodPreset[] | null = null;
+let hydratePromise: Promise<void> | null = null;
+let migratedLocal = false;
+
+export function presetSignature(
+  p: Pick<ManualFoodPreset, 'name' | 'grams' | 'protein' | 'calories'>,
+): string {
   const n = p.name.trim().toLowerCase();
   return `${n}|${p.grams}|${p.protein}|${p.calories}`;
-}
-
-function readRaw(): ManualFoodPreset[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isManualFoodPreset);
-  } catch {
-    return [];
-  }
 }
 
 function isManualFoodPreset(x: unknown): x is ManualFoodPreset {
@@ -43,12 +43,28 @@ function isManualFoodPreset(x: unknown): x is ManualFoodPreset {
   );
 }
 
-function writeAll(list: ManualFoodPreset[]): void {
+function readLocalRaw(): ManualFoodPreset[] {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isManualFoodPreset);
   } catch {
-    /* ignore quota / private mode */
+    return [];
   }
+}
+
+function clearLocalStorage(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function sortNewest(list: ManualFoodPreset[]): ManualFoodPreset[] {
+  return [...list].sort((a, b) => b.savedAt - a.savedAt);
 }
 
 /**
@@ -56,86 +72,139 @@ function writeAll(list: ManualFoodPreset[]): void {
  * word must also appear in the name — so "לאפה ש" requires "לאפה" in the name, not only "ש".
  * Newest first.
  */
-export function matchManualPresets(q: string, limit: number, requiredWords: string[] = []): ManualFoodPreset[] {
+export function matchManualPresetsFromList(
+  list: ManualFoodPreset[],
+  q: string,
+  limit: number,
+  requiredWords: string[] = [],
+): ManualFoodPreset[] {
   const needle = q.trim().toLowerCase();
   if (needle.length < 1) return [];
   const reqs = requiredWords.map((w) => w.trim().toLowerCase()).filter((w) => w.length > 0);
-  const list = readRaw()
+  return sortNewest(list)
     .filter((p) => {
       const name = p.name.toLowerCase();
       if (!reqs.every((rw) => name.includes(rw))) return false;
       return name.includes(needle);
     })
-    .sort((a, b) => b.savedAt - a.savedAt);
-  return list.slice(0, Math.max(0, limit));
-}
-
-/** All saved presets (newest first), for browse-on-focus UI. */
-export function listAllManualPresets(limit: number): ManualFoodPreset[] {
-  return readRaw()
-    .sort((a, b) => b.savedAt - a.savedAt)
     .slice(0, Math.max(0, limit));
 }
 
-export type SavePresetResult = { ok: true; updated: boolean } | { ok: false; reason: 'invalid' };
+/** Prefer first list on signature collision (typically saved presets over history). */
+export function mergeFoodSuggestionsBySignature(
+  preferred: ManualFoodPreset[],
+  extra: ManualFoodPreset[],
+  limit: number,
+): ManualFoodPreset[] {
+  const seen = new Set<string>();
+  const out: ManualFoodPreset[] = [];
+  for (const p of [...preferred, ...extra]) {
+    const sig = presetSignature(p);
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    out.push(p);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+async function migrateLocalIfNeeded(): Promise<void> {
+  if (migratedLocal) return;
+  migratedLocal = true;
+  const local = readLocalRaw();
+  if (local.length === 0) return;
+  for (const p of local) {
+    try {
+      await saveManualPresetRemote({
+        name: p.name,
+        grams: p.grams,
+        protein: p.protein,
+        calories: p.calories,
+      });
+    } catch {
+      /* keep going; leave local until a full successful pass */
+    }
+  }
+  clearLocalStorage();
+}
+
+/** Load (and cache) presets from the backend; migrates legacy localStorage once. */
+export async function ensureManualPresetsLoaded(): Promise<ManualFoodPreset[]> {
+  if (cache !== null) return cache;
+  if (!hydratePromise) {
+    hydratePromise = (async () => {
+      try {
+        await migrateLocalIfNeeded();
+        const remote = await fetchManualPresets(MAX_PRESETS);
+        cache = sortNewest(remote);
+      } catch {
+        cache = [];
+      }
+    })().finally(() => {
+      hydratePromise = null;
+    });
+  }
+  await hydratePromise;
+  return cache ?? [];
+}
+
+export async function refreshManualPresetsCache(): Promise<ManualFoodPreset[]> {
+  const remote = await fetchManualPresets(MAX_PRESETS);
+  cache = sortNewest(remote);
+  return cache;
+}
+
+/** Sync view of cache (may be empty before hydrate). Prefer ensureManualPresetsLoaded. */
+export function listAllManualPresets(limit: number): ManualFoodPreset[] {
+  return sortNewest(cache ?? []).slice(0, Math.max(0, limit));
+}
+
+export function matchManualPresets(q: string, limit: number, requiredWords: string[] = []): ManualFoodPreset[] {
+  return matchManualPresetsFromList(cache ?? [], q, limit, requiredWords);
+}
+
+export type SavePresetResult =
+  | { ok: true; updated: boolean; preset: ManualFoodPreset }
+  | { ok: false; reason: 'invalid' | 'network' };
 
 /**
- * Saves or updates a preset with the same macro signature. Drops oldest when over cap.
+ * Saves or updates a preset with the same macro signature on the server.
  */
-export function saveManualPreset(data: {
+export async function saveManualPreset(data: {
   name: string;
   grams: number;
   protein: number;
   calories: number;
-}): SavePresetResult {
+}): Promise<SavePresetResult> {
   const name = data.name.trim();
   if (!name) return { ok: false, reason: 'invalid' };
-
-  const sig = presetSignature({
-    name,
-    grams: data.grams,
-    protein: data.protein,
-    calories: data.calories,
-  });
-
-  let list = readRaw();
-  const existingIdx = list.findIndex((p) => presetSignature(p) === sig);
-
-  const now = Date.now();
-  if (existingIdx >= 0) {
-    const cur = list[existingIdx]!;
-    list[existingIdx] = { ...cur, savedAt: now };
-    writeAll(list);
-    return { ok: true, updated: true };
+  try {
+    const saved = await saveManualPresetRemote({
+      name,
+      grams: data.grams,
+      protein: data.protein,
+      calories: data.calories,
+    });
+    await refreshManualPresetsCache();
+    return { ok: true, updated: Boolean(saved.updated), preset: saved };
+  } catch {
+    return { ok: false, reason: 'network' };
   }
-
-  const id =
-    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `preset-${now}-${Math.random().toString(36).slice(2, 9)}`;
-
-  const next: ManualFoodPreset = {
-    id,
-    name,
-    grams: data.grams,
-    protein: data.protein,
-    calories: data.calories,
-    savedAt: now,
-  };
-
-  list = [next, ...list.filter((p) => p.id !== id)];
-  if (list.length > MAX_PRESETS) {
-    list = list.sort((a, b) => b.savedAt - a.savedAt).slice(0, MAX_PRESETS);
-  }
-  writeAll(list);
-  return { ok: true, updated: false };
 }
 
-/** Removes a preset by id. Returns whether an entry was removed. */
-export function deleteManualPreset(id: string): boolean {
-  const list = readRaw();
-  const next = list.filter((p) => p.id !== id);
-  if (next.length === list.length) return false;
-  writeAll(next);
-  return true;
+/** Removes a preset by id on the server. Returns whether an entry was removed. */
+export async function deleteManualPreset(id: string): Promise<boolean> {
+  try {
+    const ok = await deleteManualPresetRemote(id);
+    if (ok) {
+      if (cache !== null) {
+        cache = cache.filter((p) => p.id !== id);
+      } else {
+        await refreshManualPresetsCache();
+      }
+    }
+    return ok;
+  } catch {
+    return false;
+  }
 }

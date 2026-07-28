@@ -1,0 +1,17 @@
+node_modules/
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+data/
+dist/
+*.egg-info/
+folder old/
+old/
+.cursor/
+.git/
+frontend/dist/
+*.log
+.env
+.env.*
+!/.env.example

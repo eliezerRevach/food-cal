@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { ArrowLeft, Calendar as CalendarIcon, ChefHat, Edit3, MessageSquare, Sparkles } from 'lucide-react';
+import { ArrowLeft, Calendar as CalendarIcon, ChefHat, Edit3, History, MessageSquare, Sparkles } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Calendar } from '../components/ui/calendar';
@@ -31,6 +31,8 @@ import {
   ApiError,
   readLlmFallbackPreference,
   writeLlmFallbackPreference,
+  readHistoryAutocorrectPreference,
+  writeHistoryAutocorrectPreference,
   enqueueLogMealJob,
   getMealJobStatus,
   listActiveMealJobs,
@@ -96,6 +98,9 @@ export default function DailyLog() {
   const [showChat, setShowChat] = useState(false);
   const [inputMode, setInputMode] = useState<'chat' | 'manual' | 'recipe'>('chat');
   const [llmFallback, setLlmFallback] = useState(() => readLlmFallbackPreference());
+  const [historyAutocorrect, setHistoryAutocorrect] = useState(() =>
+    readHistoryAutocorrectPreference(),
+  );
 
   const dateStr = formatDate(selectedDate);
 
@@ -371,25 +376,46 @@ export default function DailyLog() {
                           : 'Build a composite meal or log a portion by grams'}
                     </CardDescription>
                   </div>
-                  {(inputMode === 'chat' || inputMode === 'recipe') && (
-                    <div className="flex shrink-0 items-center gap-2 rounded-lg border border-purple-200 bg-gradient-to-r from-purple-50 to-blue-50 px-3 py-2 dark:border-purple-900/50 dark:from-purple-950/40 dark:to-blue-950/40">
-                      <Sparkles
-                        className={`size-4 shrink-0 ${llmFallback ? 'text-purple-600 dark:text-purple-400' : 'text-muted-foreground'}`}
-                        aria-hidden
-                      />
-                      <Label htmlFor="llm-toggle" className="cursor-pointer text-xs font-medium">
-                        AI Assist
-                      </Label>
-                      <Switch
-                        id="llm-toggle"
-                        checked={llmFallback}
-                        onCheckedChange={(checked) => {
-                          setLlmFallback(checked);
-                          writeLlmFallbackPreference(checked);
-                        }}
-                      />
-                    </div>
-                  )}
+                  <div className="flex shrink-0 flex-row flex-wrap items-center justify-end gap-2">
+                    {(inputMode === 'chat' || inputMode === 'manual') && (
+                      <div className="flex shrink-0 items-center gap-2 rounded-lg border border-teal-200 bg-gradient-to-r from-teal-50 to-cyan-50 px-3 py-2 dark:border-teal-900/50 dark:from-teal-950/40 dark:to-cyan-950/40">
+                        <History
+                          className={`size-4 shrink-0 ${historyAutocorrect ? 'text-teal-600 dark:text-teal-400' : 'text-muted-foreground'}`}
+                          aria-hidden
+                        />
+                        <Label htmlFor="history-autocorrect-toggle" className="cursor-pointer text-xs font-medium">
+                          History Autocorrect
+                        </Label>
+                        <Switch
+                          id="history-autocorrect-toggle"
+                          checked={historyAutocorrect}
+                          onCheckedChange={(checked) => {
+                            setHistoryAutocorrect(checked);
+                            writeHistoryAutocorrectPreference(checked);
+                          }}
+                        />
+                      </div>
+                    )}
+                    {(inputMode === 'chat' || inputMode === 'recipe') && (
+                      <div className="flex shrink-0 items-center gap-2 rounded-lg border border-purple-200 bg-gradient-to-r from-purple-50 to-blue-50 px-3 py-2 dark:border-purple-900/50 dark:from-purple-950/40 dark:to-blue-950/40">
+                        <Sparkles
+                          className={`size-4 shrink-0 ${llmFallback ? 'text-purple-600 dark:text-purple-400' : 'text-muted-foreground'}`}
+                          aria-hidden
+                        />
+                        <Label htmlFor="llm-toggle" className="cursor-pointer text-xs font-medium">
+                          AI Assist
+                        </Label>
+                        <Switch
+                          id="llm-toggle"
+                          checked={llmFallback}
+                          onCheckedChange={(checked) => {
+                            setLlmFallback(checked);
+                            writeLlmFallbackPreference(checked);
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="chat" className="gap-2">
@@ -409,6 +435,7 @@ export default function DailyLog() {
               <CardContent>
                 <TabsContent value="chat" className="mt-0">
                   <ChatInput
+                    historyAutocorrect={historyAutocorrect}
                     onSubmit={handleChatSubmit}
                     onSubmitPreset={(p) =>
                       handleManualSubmit({
@@ -421,7 +448,10 @@ export default function DailyLog() {
                   />
                 </TabsContent>
                 <TabsContent value="manual" className="mt-0">
-                  <ManualFoodInput onSubmit={handleManualSubmit} />
+                  <ManualFoodInput
+                    historyAutocorrect={historyAutocorrect}
+                    onSubmit={handleManualSubmit}
+                  />
                 </TabsContent>
                 <TabsContent value="recipe" className="mt-0">
                   <RecipeTab

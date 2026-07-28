@@ -1,6 +1,6 @@
-# Restart FastAPI backend: free port 8000, then run uvicorn from project root (parent of scripts/).
+# Restart FastAPI backend: free port 8002, then run uvicorn from project root (parent of scripts/).
 $ErrorActionPreference = "Stop"
-$Port = 8000
+$Port = 8002
 $BindHost = "127.0.0.1"
 
 $ProjectRoot = Split-Path $PSScriptRoot -Parent

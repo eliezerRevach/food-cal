@@ -32,17 +32,19 @@ export function FoodEntry({ entry, onDelete }: FoodEntryProps) {
       toast.error('Weight (grams) is required to save a preset.');
       return;
     }
-    const result = saveManualPreset({
-      name: entry.name,
-      grams: entry.gramsTotal,
-      protein: entry.protein,
-      calories: entry.calories,
-    });
-    if (!result.ok) {
-      toast.error('Could not save preset.');
-      return;
-    }
-    toast.success(result.updated ? 'Saved preset updated.' : 'Saved for reuse in this browser.');
+    void (async () => {
+      const result = await saveManualPreset({
+        name: entry.name,
+        grams: entry.gramsTotal!,
+        protein: entry.protein,
+        calories: entry.calories,
+      });
+      if (!result.ok) {
+        toast.error(result.reason === 'network' ? 'Could not reach server to save.' : 'Could not save preset.');
+        return;
+      }
+      toast.success(result.updated ? 'Saved preset updated.' : 'Saved for reuse.');
+    })();
   };
 
   return (

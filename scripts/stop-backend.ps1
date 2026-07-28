@@ -1,6 +1,6 @@
 # Stop FastAPI backend: uvicorn workers, then anything still LISTENING on the port.
 $ErrorActionPreference = "Continue"
-$Port = 8000
+$Port = 8002
 
 $ProjectRoot = Split-Path $PSScriptRoot -Parent
 Set-Location $ProjectRoot

@@ -734,3 +734,71 @@ def entries_rollups(start_iso: str, end_iso: str) -> list[dict[str, Any]]:
             d["total_protein_g"] = round(float(r["sum_prot"] or 0), 2)
         result.append(d)
     return result
+
+
+def _history_food_signature(name: str, grams: float, calories: float, protein: float) -> str:
+    return f"{name.strip().lower()}|{grams}|{calories}|{protein}"
+
+
+def suggest_history_foods(
+    *,
+    q: str = "",
+    limit: int = 25,
+    required_words: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Deduped meal suggestions from logged history (same data as View History)."""
+    if limit < 1:
+        return []
+    limit = min(limit, 100)
+    conn = db.get_connection()
+    rows = conn.execute(
+        """
+        SELECT id, total_calories, total_protein_g, raw_text, created_at
+        FROM entries
+        WHERE total_calories IS NOT NULL
+        ORDER BY created_at DESC, id DESC
+        """
+    ).fetchall()
+    eids = [int(r["id"]) for r in rows]
+    gram_map = _grams_rollups_for_entries(conn, eids)
+    needle = q.strip().lower()
+    reqs = [w.strip().lower() for w in (required_words or []) if w.strip()]
+
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        eid = int(r["id"])
+        grams_info = gram_map.get(eid)
+        if grams_info is None:
+            continue
+        grams_total, _partial = grams_info
+        if grams_total is None or grams_total <= 0:
+            continue
+        name = _display_name_for_entry(conn, eid, str(r["raw_text"] or ""))
+        name_l = name.lower()
+        if reqs and not all(rw in name_l for rw in reqs):
+            continue
+        if needle and needle not in name_l:
+            continue
+        calories = round(float(r["total_calories"]))
+        tp = r["total_protein_g"]
+        protein = round(float(tp)) if tp is not None else 0
+        grams = float(grams_total)
+        sig = _history_food_signature(name, grams, float(calories), float(protein))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        saved_at = _parse_created_at_to_ms(r["created_at"], eid)
+        out.append(
+            {
+                "id": f"hist-{eid}",
+                "name": name,
+                "grams": grams,
+                "protein": float(protein),
+                "calories": float(calories),
+                "savedAt": saved_at,
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out

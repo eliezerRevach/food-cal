@@ -9,6 +9,7 @@ import { fetchFoodSuggestions, parseIngredient } from '../utils/api';
 import { getPresetSuggestionMode, replaceActiveToken } from '../utils/foodNameQuery';
 import {
   deleteManualPreset,
+  ensureManualPresetsLoaded,
   listAllManualPresets,
   matchManualPresets,
   MAX_PRESETS,
@@ -136,25 +137,31 @@ export function IngredientRowEditor({
       return;
     }
     const mode = getPresetSuggestionMode(row.label);
-    if (mode.kind === 'browse') {
-      setPresetSuggestions(listAllManualPresets(MAX_PRESETS));
-      setUsdaSuggestions([]);
+    let cancelled = false;
+    void (async () => {
+      await ensureManualPresetsLoaded();
+      if (cancelled) return;
+      if (mode.kind === 'browse') {
+        setPresetSuggestions(listAllManualPresets(MAX_PRESETS));
+        setUsdaSuggestions([]);
+        setSelectedIndex(-1);
+        return;
+      }
+      const q = mode.q;
+      setPresetSuggestions(matchManualPresets(q, 6, mode.requiredWords));
       setSelectedIndex(-1);
-      return;
-    }
-    const q = mode.q;
-    setPresetSuggestions(matchManualPresets(q, 6, mode.requiredWords));
-    setSelectedIndex(-1);
-    if (q.length < 2) {
-      setUsdaSuggestions([]);
-      return;
-    }
-    debounceRef.current = setTimeout(() => {
-      void fetchFoodSuggestions(q, 8).then(({ suggestions }) => {
-        setUsdaSuggestions(suggestions);
-      });
-    }, 280);
+      if (q.length < 2) {
+        setUsdaSuggestions([]);
+        return;
+      }
+      debounceRef.current = setTimeout(() => {
+        void fetchFoodSuggestions(q, 8).then(({ suggestions }) => {
+          if (!cancelled) setUsdaSuggestions(suggestions);
+        });
+      }, 280);
+    })();
     return () => {
+      cancelled = true;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [row.label, suggestionsOpen]);
@@ -363,7 +370,14 @@ export function IngredientRowEditor({
                         type="button"
                         className="px-2 text-muted-foreground hover:text-destructive"
                         onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => deleteManualPreset(srow.preset.id)}
+                        onClick={() => {
+                          void deleteManualPreset(srow.preset.id).then((ok) => {
+                            if (ok) {
+                              setPresetSuggestions((prev) => prev.filter((p) => p.id !== srow.preset.id));
+                              toast.success('Removed from saved list');
+                            }
+                          });
+                        }}
                       >
                         <X className="size-3.5" />
                       </button>

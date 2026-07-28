@@ -10,6 +10,10 @@ from pydantic import BaseModel, Field
 
 from app import db
 from app.meals import validate_date_iso
+from app.manual_presets import (
+    export_manual_presets_for_backup,
+    import_manual_presets_from_backup,
+)
 from app.recipes import export_recipes_for_backup, import_recipes_from_backup
 
 
@@ -49,6 +53,14 @@ class BackupRecipeExport(BaseModel):
     ingredients: list[BackupRecipeIngredientExport] = Field(default_factory=list)
 
 
+class BackupManualPresetExport(BaseModel):
+    name: str
+    grams: float
+    protein: float
+    calories: float
+    saved_at: str | None = None
+
+
 class BackupImportBody(BaseModel):
     format: Literal["foodcal-backup"]
     version: Literal[1]
@@ -56,6 +68,7 @@ class BackupImportBody(BaseModel):
     mode: Literal["append", "replace"] = "append"
     exported_at: str | None = None
     recipes: list[BackupRecipeExport] | None = None
+    manual_presets: list[BackupManualPresetExport] | None = None
 
 
 def _utc_now_iso() -> str:
@@ -130,6 +143,7 @@ def export_backup() -> dict[str, Any]:
         "exported_at": _utc_now_iso(),
         "entries": entries_out,
         "recipes": export_recipes_for_backup(),
+        "manual_presets": export_manual_presets_for_backup(),
     }
 
 
@@ -146,10 +160,12 @@ def import_backup(body: BackupImportBody) -> dict[str, Any]:
     inserted_entries = 0
     inserted_items = 0
     inserted_recipes = 0
+    inserted_manual_presets = 0
 
     with db.transaction() as conn:
         if body.mode == "replace":
             conn.execute("DELETE FROM entries")
+            conn.execute("DELETE FROM manual_presets")
 
         for ent in body.entries:
             validate_date_iso(ent.date_iso)
@@ -231,10 +247,25 @@ def import_backup(body: BackupImportBody) -> dict[str, Any]:
         ]
         inserted_recipes = import_recipes_from_backup(recipe_dicts)
 
+    if body.manual_presets:
+        inserted_manual_presets = import_manual_presets_from_backup(
+            [
+                {
+                    "name": p.name,
+                    "grams": p.grams,
+                    "protein": p.protein,
+                    "calories": p.calories,
+                    "saved_at": p.saved_at,
+                }
+                for p in body.manual_presets
+            ]
+        )
+
     return {
         "status": "ok",
         "mode": body.mode,
         "inserted_entries": inserted_entries,
         "inserted_items": inserted_items,
         "inserted_recipes": inserted_recipes,
+        "inserted_manual_presets": inserted_manual_presets,
     }

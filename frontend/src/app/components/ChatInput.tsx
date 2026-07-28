@@ -3,13 +3,16 @@ import { Mic, Send, Square, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { toast } from 'sonner';
-import { fetchFoodSuggestions } from '../utils/api';
+import { fetchFoodSuggestions, fetchHistoryFoodSuggestions } from '../utils/api';
 import { effectiveSearchQuery, getPresetSuggestionMode, replaceActiveToken } from '../utils/foodNameQuery';
 import {
   deleteManualPreset,
+  ensureManualPresetsLoaded,
   listAllManualPresets,
   matchManualPresets,
+  matchManualPresetsFromList,
   MAX_PRESETS,
+  presetSignature,
   type ManualFoodPreset,
 } from '../utils/manualPresets';
 
@@ -18,21 +21,25 @@ interface ChatInputProps {
   /** When set, choosing a saved preset logs via manual meal API instead of inserting the name for chat/LLM. */
   onSubmitPreset?: (preset: ManualFoodPreset) => void | Promise<void>;
   placeholder?: string;
+  historyAutocorrect?: boolean;
 }
 
 type SuggestionRow =
   | { type: 'preset'; preset: ManualFoodPreset }
+  | { type: 'history'; preset: ManualFoodPreset }
   | { type: 'usda'; name: string };
 
 export function ChatInput({
   onSubmit,
   onSubmitPreset,
   placeholder = "Try: 'I had chicken breast and rice'",
+  historyAutocorrect = false,
 }: ChatInputProps) {
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [presetSuggestions, setPresetSuggestions] = useState<ManualFoodPreset[]>([]);
+  const [historySuggestions, setHistorySuggestions] = useState<ManualFoodPreset[]>([]);
   const [usdaSuggestions, setUsdaSuggestions] = useState<string[]>([]);
   const [usdaEnabled, setUsdaEnabled] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(-1);
@@ -43,55 +50,93 @@ export function ChatInput({
   const blurCloseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const suggestionRows = useMemo((): SuggestionRow[] => {
-    const presetRows: SuggestionRow[] = presetSuggestions.map((p) => ({ type: 'preset', preset: p }));
+    const seenSig = new Set<string>();
+    const foodRows: SuggestionRow[] = [];
+    for (const p of presetSuggestions) {
+      const sig = presetSignature(p);
+      if (seenSig.has(sig)) continue;
+      seenSig.add(sig);
+      foodRows.push({ type: 'preset', preset: p });
+    }
+    for (const p of historySuggestions) {
+      const sig = presetSignature(p);
+      if (seenSig.has(sig)) continue;
+      seenSig.add(sig);
+      foodRows.push({ type: 'history', preset: p });
+    }
     const usdaRows: SuggestionRow[] = usdaSuggestions.map((name) => ({ type: 'usda', name }));
-    return [...presetRows, ...usdaRows];
-  }, [presetSuggestions, usdaSuggestions]);
+    return [...foodRows.slice(0, MAX_PRESETS), ...usdaRows];
+  }, [presetSuggestions, historySuggestions, usdaSuggestions]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     if (!focused) {
       setPresetSuggestions([]);
+      setHistorySuggestions([]);
       setUsdaSuggestions([]);
       setSelectedIndex(-1);
       return;
     }
 
     const mode = getPresetSuggestionMode(input);
+    let cancelled = false;
 
-    if (mode.kind === 'browse') {
-      const all = listAllManualPresets(MAX_PRESETS);
-      setPresetSuggestions(all);
-      setUsdaSuggestions([]);
-      setUsdaEnabled(true);
-      setSelectedIndex(-1);
-      return;
-    }
+    void (async () => {
+      await ensureManualPresetsLoaded();
+      if (cancelled) return;
 
-    const q = mode.q;
-    const presets = matchManualPresets(q, 6, mode.requiredWords);
-    setPresetSuggestions(presets);
-    setSelectedIndex(-1);
-
-    if (q.length < 2) {
-      setUsdaSuggestions([]);
-      setUsdaEnabled(true);
-      return;
-    }
-
-    debounceRef.current = setTimeout(() => {
-      void (async () => {
-        const { suggestions: list, usdaEnabled: enabled } = await fetchFoodSuggestions(q, 6);
-        setUsdaSuggestions(list);
-        setUsdaEnabled(enabled);
+      if (mode.kind === 'browse') {
+        setPresetSuggestions(listAllManualPresets(MAX_PRESETS));
+        setUsdaSuggestions([]);
+        setUsdaEnabled(true);
         setSelectedIndex(-1);
-      })();
-    }, 350);
+        if (historyAutocorrect) {
+          const hist = await fetchHistoryFoodSuggestions('', MAX_PRESETS);
+          if (!cancelled) setHistorySuggestions(hist);
+        } else {
+          setHistorySuggestions([]);
+        }
+        return;
+      }
+
+      const q = mode.q;
+      setPresetSuggestions(matchManualPresets(q, 6, mode.requiredWords));
+      setSelectedIndex(-1);
+
+      if (historyAutocorrect) {
+        const hist = await fetchHistoryFoodSuggestions(q, 6);
+        if (!cancelled) {
+          setHistorySuggestions(
+            matchManualPresetsFromList(hist, q, 6, mode.requiredWords.length ? mode.requiredWords : []),
+          );
+        }
+      } else {
+        setHistorySuggestions([]);
+      }
+
+      if (q.length < 2) {
+        setUsdaSuggestions([]);
+        setUsdaEnabled(true);
+        return;
+      }
+
+      debounceRef.current = setTimeout(() => {
+        void (async () => {
+          const { suggestions: list, usdaEnabled: enabled } = await fetchFoodSuggestions(q, 6);
+          if (cancelled) return;
+          setUsdaSuggestions(list);
+          setUsdaEnabled(enabled);
+          setSelectedIndex(-1);
+        })();
+      }, 350);
+    })();
+
     return () => {
+      cancelled = true;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [input, focused]);
+  }, [input, focused, historyAutocorrect]);
 
   useEffect(() => {
     return () => {
@@ -103,6 +148,7 @@ export function ChatInput({
   const submitPreset = async (preset: ManualFoodPreset) => {
     if (isSending || !onSubmitPreset) return;
     setPresetSuggestions([]);
+    setHistorySuggestions([]);
     setUsdaSuggestions([]);
     setSelectedIndex(-1);
     setInput('');
@@ -115,29 +161,34 @@ export function ChatInput({
   };
 
   const applySuggestionRow = (row: SuggestionRow) => {
-    if (row.type === 'preset' && onSubmitPreset) {
+    if ((row.type === 'preset' || row.type === 'history') && onSubmitPreset) {
       void submitPreset(row.preset);
       return;
     }
-    const text = row.type === 'preset' ? row.preset.name : row.name;
+    const text = row.type === 'usda' ? row.name : row.preset.name;
     setInput(replaceActiveToken(input, text));
     setPresetSuggestions([]);
+    setHistorySuggestions([]);
     setUsdaSuggestions([]);
     setSelectedIndex(-1);
   };
 
   const removePreset = (id: string) => {
-    if (!deleteManualPreset(id)) return;
-    const mode = getPresetSuggestionMode(input);
-    if (mode.kind === 'browse') {
-      const all = listAllManualPresets(MAX_PRESETS);
-      setPresetSuggestions(all);
+    void (async () => {
+      const ok = await deleteManualPreset(id);
+      if (!ok) {
+        toast.error('Could not remove saved food.');
+        return;
+      }
+      const mode = getPresetSuggestionMode(input);
+      if (mode.kind === 'browse') {
+        setPresetSuggestions(listAllManualPresets(MAX_PRESETS));
+      } else {
+        setPresetSuggestions(matchManualPresets(mode.q, 6, mode.requiredWords));
+      }
       setSelectedIndex(-1);
-    } else {
-      setPresetSuggestions(matchManualPresets(mode.q, 6, mode.requiredWords));
-      setSelectedIndex(-1);
-    }
-    toast.success('Removed from saved list');
+      toast.success('Removed from saved list');
+    })();
   };
 
   const handleSubmit = async () => {
@@ -145,6 +196,7 @@ export function ChatInput({
     if (!t || isSending) return;
     setInput('');
     setPresetSuggestions([]);
+    setHistorySuggestions([]);
     setUsdaSuggestions([]);
     setSelectedIndex(-1);
     setIsSending(true);
@@ -161,6 +213,7 @@ export function ChatInput({
     if (e.key === 'Escape' && showList) {
       e.preventDefault();
       setPresetSuggestions([]);
+      setHistorySuggestions([]);
       setUsdaSuggestions([]);
       setSelectedIndex(-1);
       return;
@@ -277,9 +330,9 @@ export function ChatInput({
             role="listbox"
           >
             {suggestionRows.map((row, idx) =>
-              row.type === 'preset' ? (
+              row.type === 'preset' || row.type === 'history' ? (
                 <li
-                  key={`p-${row.preset.id}`}
+                  key={`${row.type}-${row.preset.id}`}
                   className="flex items-stretch"
                   role="option"
                   aria-selected={selectedIndex === idx}
@@ -294,25 +347,28 @@ export function ChatInput({
                   >
                     <div className="font-medium">{row.preset.name}</div>
                     <div className="text-muted-foreground text-xs">
-                      Saved · {row.preset.calories} kcal · {row.preset.grams}g · P {row.preset.protein}g
+                      {row.type === 'history' ? 'History' : 'Saved'} · {row.preset.calories} kcal ·{' '}
+                      {row.preset.grams}g · P {row.preset.protein}g
                     </div>
                   </button>
-                  <button
-                    type="button"
-                    aria-label="Remove from saved list"
-                    className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive shrink-0 px-2.5"
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                    }}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      removePreset(row.preset.id);
-                    }}
-                  >
-                    <X className="size-4" />
-                  </button>
+                  {row.type === 'preset' && (
+                    <button
+                      type="button"
+                      aria-label="Remove from saved list"
+                      className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive shrink-0 px-2.5"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        removePreset(row.preset.id);
+                      }}
+                    >
+                      <X className="size-4" />
+                    </button>
+                  )}
                 </li>
               ) : (
                 <li

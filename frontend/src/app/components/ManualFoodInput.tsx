@@ -5,13 +5,16 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { cn } from './ui/utils';
-import { fetchFoodSuggestions } from '../utils/api';
+import { fetchFoodSuggestions, fetchHistoryFoodSuggestions } from '../utils/api';
 import { effectiveSearchQuery, getPresetSuggestionMode, replaceActiveToken } from '../utils/foodNameQuery';
 import {
   deleteManualPreset,
+  ensureManualPresetsLoaded,
   listAllManualPresets,
   matchManualPresets,
+  matchManualPresetsFromList,
   MAX_PRESETS,
+  presetSignature,
   saveManualPreset,
   type ManualFoodPreset,
 } from '../utils/manualPresets';
@@ -31,10 +34,12 @@ export type ManualFoodFormData = {
 
 interface ManualFoodInputProps {
   onSubmit: (data: ManualFoodFormData) => void;
+  historyAutocorrect?: boolean;
 }
 
 type SuggestionRow =
   | { type: 'preset'; preset: ManualFoodPreset }
+  | { type: 'history'; preset: ManualFoodPreset }
   | { type: 'usda'; name: string };
 
 function formHasValidNumbers(name: string, grams: string, protein: string, calories: string): boolean {
@@ -46,7 +51,7 @@ function formHasValidNumbers(name: string, grams: string, protein: string, calor
   );
 }
 
-export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
+export function ManualFoodInput({ onSubmit, historyAutocorrect = false }: ManualFoodInputProps) {
   const [formData, setFormData] = useState({
     name: '',
     grams: '',
@@ -55,6 +60,7 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
   });
 
   const [presetSuggestions, setPresetSuggestions] = useState<ManualFoodPreset[]>([]);
+  const [historySuggestions, setHistorySuggestions] = useState<ManualFoodPreset[]>([]);
   const [usdaSuggestions, setUsdaSuggestions] = useState<string[]>([]);
   const [usdaEnabled, setUsdaEnabled] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(-1);
@@ -71,55 +77,93 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
   const blurCloseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const suggestionRows = useMemo((): SuggestionRow[] => {
-    const presetRows: SuggestionRow[] = presetSuggestions.map((p) => ({ type: 'preset', preset: p }));
+    const seenSig = new Set<string>();
+    const foodRows: SuggestionRow[] = [];
+    for (const p of presetSuggestions) {
+      const sig = presetSignature(p);
+      if (seenSig.has(sig)) continue;
+      seenSig.add(sig);
+      foodRows.push({ type: 'preset', preset: p });
+    }
+    for (const p of historySuggestions) {
+      const sig = presetSignature(p);
+      if (seenSig.has(sig)) continue;
+      seenSig.add(sig);
+      foodRows.push({ type: 'history', preset: p });
+    }
     const usdaRows: SuggestionRow[] = usdaSuggestions.map((name) => ({ type: 'usda', name }));
-    return [...presetRows, ...usdaRows];
-  }, [presetSuggestions, usdaSuggestions]);
+    return [...foodRows.slice(0, MAX_PRESETS), ...usdaRows];
+  }, [presetSuggestions, historySuggestions, usdaSuggestions]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     if (!suggestionsOpen) {
       setPresetSuggestions([]);
+      setHistorySuggestions([]);
       setUsdaSuggestions([]);
       setSelectedIndex(-1);
       return;
     }
 
     const mode = getPresetSuggestionMode(formData.name);
+    let cancelled = false;
 
-    if (mode.kind === 'browse') {
-      const all = listAllManualPresets(MAX_PRESETS);
-      setPresetSuggestions(all);
-      setUsdaSuggestions([]);
-      setUsdaEnabled(true);
-      setSelectedIndex(-1);
-      return;
-    }
+    void (async () => {
+      await ensureManualPresetsLoaded();
+      if (cancelled) return;
 
-    const q = mode.q;
-    const presets = matchManualPresets(q, 6, mode.requiredWords);
-    setPresetSuggestions(presets);
-    setSelectedIndex(-1);
-
-    if (q.length < 2) {
-      setUsdaSuggestions([]);
-      setUsdaEnabled(true);
-      return;
-    }
-
-    debounceRef.current = setTimeout(() => {
-      void (async () => {
-        const { suggestions: list, usdaEnabled: enabled } = await fetchFoodSuggestions(q, 6);
-        setUsdaSuggestions(list);
-        setUsdaEnabled(enabled);
+      if (mode.kind === 'browse') {
+        setPresetSuggestions(listAllManualPresets(MAX_PRESETS));
+        setUsdaSuggestions([]);
+        setUsdaEnabled(true);
         setSelectedIndex(-1);
-      })();
-    }, 350);
+        if (historyAutocorrect) {
+          const hist = await fetchHistoryFoodSuggestions('', MAX_PRESETS);
+          if (!cancelled) setHistorySuggestions(hist);
+        } else {
+          setHistorySuggestions([]);
+        }
+        return;
+      }
+
+      const q = mode.q;
+      setPresetSuggestions(matchManualPresets(q, 6, mode.requiredWords));
+      setSelectedIndex(-1);
+
+      if (historyAutocorrect) {
+        const hist = await fetchHistoryFoodSuggestions(q, 6);
+        if (!cancelled) {
+          setHistorySuggestions(
+            matchManualPresetsFromList(hist, q, 6, mode.requiredWords.length ? mode.requiredWords : []),
+          );
+        }
+      } else {
+        setHistorySuggestions([]);
+      }
+
+      if (q.length < 2) {
+        setUsdaSuggestions([]);
+        setUsdaEnabled(true);
+        return;
+      }
+
+      debounceRef.current = setTimeout(() => {
+        void (async () => {
+          const { suggestions: list, usdaEnabled: enabled } = await fetchFoodSuggestions(q, 6);
+          if (cancelled) return;
+          setUsdaSuggestions(list);
+          setUsdaEnabled(enabled);
+          setSelectedIndex(-1);
+        })();
+      }, 350);
+    })();
+
     return () => {
+      cancelled = true;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [formData.name, suggestionsOpen]);
+  }, [formData.name, suggestionsOpen, historyAutocorrect]);
 
   const isValid = formHasValidNumbers(
     formData.name,
@@ -136,13 +180,14 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
 
   const clearSuggestions = () => {
     setPresetSuggestions([]);
+    setHistorySuggestions([]);
     setUsdaSuggestions([]);
     setSelectedIndex(-1);
     setSuggestionsOpen(false);
   };
 
   const applySuggestionRow = (row: SuggestionRow) => {
-    if (row.type === 'preset') {
+    if (row.type === 'preset' || row.type === 'history') {
       const p = row.preset;
       linkedAnchorGramsRef.current = p.grams;
       linkedBaselineCaloriesRef.current = p.calories;
@@ -160,17 +205,22 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
   };
 
   const removePreset = (id: string) => {
-    if (!deleteManualPreset(id)) return;
-    const mode = getPresetSuggestionMode(formData.name);
-    if (mode.kind === 'browse') {
-      const all = listAllManualPresets(MAX_PRESETS);
-      setPresetSuggestions(all);
+    void (async () => {
+      const ok = await deleteManualPreset(id);
+      if (!ok) {
+        toast.error('Could not remove saved food.');
+        return;
+      }
+      await ensureManualPresetsLoaded();
+      const mode = getPresetSuggestionMode(formData.name);
+      if (mode.kind === 'browse') {
+        setPresetSuggestions(listAllManualPresets(MAX_PRESETS));
+      } else {
+        setPresetSuggestions(matchManualPresets(mode.q, 6, mode.requiredWords));
+      }
       setSelectedIndex(-1);
-    } else {
-      setPresetSuggestions(matchManualPresets(mode.q, 6, mode.requiredWords));
-      setSelectedIndex(-1);
-    }
-    toast.success('Removed from saved list');
+      toast.success('Removed from saved list');
+    })();
   };
 
   const handleSubmit = () => {
@@ -205,17 +255,19 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
       toast.error('Enter valid numbers for weight, calories, and protein.');
       return;
     }
-    const result = saveManualPreset({
-      name: formData.name,
-      grams,
-      protein,
-      calories,
-    });
-    if (!result.ok) {
-      toast.error('Could not save preset.');
-      return;
-    }
-    toast.success(result.updated ? 'Saved preset updated.' : 'Saved for reuse in this browser.');
+    void (async () => {
+      const result = await saveManualPreset({
+        name: formData.name,
+        grams,
+        protein,
+        calories,
+      });
+      if (!result.ok) {
+        toast.error(result.reason === 'network' ? 'Could not reach server to save.' : 'Could not save preset.');
+        return;
+      }
+      toast.success(result.updated ? 'Saved preset updated.' : 'Saved for reuse.');
+    })();
   };
 
   const showNameDropdown = suggestionsOpen && suggestionRows.length > 0;
@@ -342,9 +394,9 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
                 role="listbox"
               >
                 {suggestionRows.map((row, idx) =>
-                  row.type === 'preset' ? (
+                  row.type === 'preset' || row.type === 'history' ? (
                     <li
-                      key={`p-${row.preset.id}`}
+                      key={`${row.type}-${row.preset.id}`}
                       className="flex items-stretch"
                       role="option"
                       aria-selected={selectedIndex === idx}
@@ -359,25 +411,28 @@ export function ManualFoodInput({ onSubmit }: ManualFoodInputProps) {
                       >
                         <div className="font-medium">{row.preset.name}</div>
                         <div className="text-muted-foreground text-xs">
-                          Saved · {row.preset.calories} kcal · {row.preset.grams}g · P {row.preset.protein}g
+                          {row.type === 'history' ? 'History' : 'Saved'} · {row.preset.calories} kcal ·{' '}
+                          {row.preset.grams}g · P {row.preset.protein}g
                         </div>
                       </button>
-                      <button
-                        type="button"
-                        aria-label="Remove from saved list"
-                        className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive shrink-0 px-2.5"
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                        }}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          removePreset(row.preset.id);
-                        }}
-                      >
-                        <X className="size-4" />
-                      </button>
+                      {row.type === 'preset' && (
+                        <button
+                          type="button"
+                          aria-label="Remove from saved list"
+                          className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive shrink-0 px-2.5"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                          }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            removePreset(row.preset.id);
+                          }}
+                        >
+                          <X className="size-4" />
+                        </button>
+                      )}
                     </li>
                   ) : (
                     <li

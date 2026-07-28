@@ -4,9 +4,18 @@ import { ArrowLeft, TrendingUp, Calendar } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { getTodayDate, addCalendarDaysIso, formatIsoDateShort } from '../utils/foodData';
-import { fetchEntryRollups } from '../utils/api';
+import {
+  getTodayDate,
+  addCalendarDaysIso,
+  formatIsoDateShort,
+  getOfflineDayLog,
+  getOfflineLogs,
+  dateFromIsoMiddayUtc,
+} from '../utils/foodData';
+import { fetchEntryRollups, type RollupDay } from '../utils/api';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+
+type TimeRange = 'week' | 'month' | 'quarter' | 'max';
 
 type ChartDay = {
   date: string;
@@ -16,40 +25,84 @@ type ChartDay = {
   meals: number;
 };
 
+const RANGE_DAYS: Record<Exclude<TimeRange, 'max'>, number> = {
+  week: 7,
+  month: 30,
+  quarter: 90,
+};
+
+const MAX_ROLLUP_START = '1970-01-01';
+
+function calendarDaysBetween(earlierIso: string, laterIso: string): number {
+  const a = dateFromIsoMiddayUtc(earlierIso).getTime();
+  const b = dateFromIsoMiddayUtc(laterIso).getTime();
+  return Math.round((b - a) / 86_400_000);
+}
+
+function buildChartDay(date: string, rollup?: RollupDay): ChartDay {
+  const off = getOfflineDayLog(date);
+  return {
+    date: formatIsoDateShort(date),
+    fullDate: date,
+    calories: Math.round((rollup?.total_calories ?? 0) + off.totalCalories),
+    protein: Math.round((rollup?.total_protein_g ?? 0) + off.totalProtein),
+    meals: (rollup?.meals ?? 0) + off.entries.length,
+  };
+}
+
+function buildChartRows(
+  start: string,
+  end: string,
+  byDate: Map<string, RollupDay>,
+): ChartDay[] {
+  const dayCount = calendarDaysBetween(start, end) + 1;
+  const data: ChartDay[] = [];
+  for (let i = dayCount - 1; i >= 0; i--) {
+    const dateString = addCalendarDaysIso(end, -i);
+    data.push(buildChartDay(dateString, byDate.get(dateString)));
+  }
+  return data;
+}
+
+function earliestLoggedDate(end: string, rollups: RollupDay[]): string {
+  const candidates: string[] = rollups.map((r) => r.date);
+  const offline = getOfflineLogs();
+  for (const d of Object.keys(offline)) {
+    if (d <= end) candidates.push(d);
+  }
+  if (candidates.length === 0) return end;
+  return candidates.reduce((min, d) => (d < min ? d : min));
+}
+
 export default function Summary() {
   const navigate = useNavigate();
-  const [timeRange, setTimeRange] = useState<'week' | 'month'>('week');
+  const [timeRange, setTimeRange] = useState<TimeRange>('week');
   const [chartData, setChartData] = useState<ChartDay[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const days = timeRange === 'week' ? 7 : 30;
       const end = getTodayDate();
-      const start = addCalendarDaysIso(end, -(days - 1));
+      const start =
+        timeRange === 'max'
+          ? MAX_ROLLUP_START
+          : addCalendarDaysIso(end, -(RANGE_DAYS[timeRange] - 1));
       try {
         const { days: rollups } = await fetchEntryRollups(start, end);
+        if (cancelled) return;
+        const rangeStart =
+          timeRange === 'max' ? earliestLoggedDate(end, rollups) : addCalendarDaysIso(end, -(RANGE_DAYS[timeRange] - 1));
         const byDate = new Map(rollups.map((d) => [d.date, d]));
-        const data: ChartDay[] = [];
-        for (let i = days - 1; i >= 0; i--) {
-          const dateString = addCalendarDaysIso(end, -i);
-          const r = byDate.get(dateString);
-          data.push({
-            date: formatIsoDateShort(dateString),
-            fullDate: dateString,
-            calories: r?.total_calories ?? 0,
-            protein: r?.total_protein_g ?? 0,
-            meals: r?.meals ?? 0,
-          });
-        }
-        if (!cancelled) {
-          setChartData(data);
-          setLoadError(null);
-        }
+        setChartData(buildChartRows(rangeStart, end, byDate));
+        setLoadError(null);
       } catch (e) {
         if (!cancelled) {
-          setChartData([]);
+          const rangeStart =
+            timeRange === 'max'
+              ? earliestLoggedDate(end, [])
+              : addCalendarDaysIso(end, -(RANGE_DAYS[timeRange] - 1));
+          setChartData(buildChartRows(rangeStart, end, new Map()));
           setLoadError(e instanceof Error ? e.message : String(e));
         }
       }
@@ -60,11 +113,16 @@ export default function Summary() {
     };
   }, [timeRange]);
 
-  const totalDays = chartData.filter((d) => d.meals > 0).length;
+  const loggedDays = chartData.filter((d) => d.meals > 0);
+  const totalDays = loggedDays.length;
   const avgCalories =
-    totalDays > 0 ? Math.round(chartData.reduce((sum, d) => sum + d.calories, 0) / totalDays) : 0;
+    totalDays > 0
+      ? Math.round(loggedDays.reduce((sum, d) => sum + d.calories, 0) / totalDays)
+      : 0;
   const avgProtein =
-    totalDays > 0 ? Math.round(chartData.reduce((sum, d) => sum + d.protein, 0) / totalDays) : 0;
+    totalDays > 0
+      ? Math.round(loggedDays.reduce((sum, d) => sum + d.protein, 0) / totalDays)
+      : 0;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 p-4 md:p-8">
@@ -86,10 +144,32 @@ export default function Summary() {
           </p>
         )}
 
-        <Tabs value={timeRange} onValueChange={(v) => setTimeRange(v as 'week' | 'month')} className="mb-6">
-          <TabsList className="grid w-full max-w-md grid-cols-2">
-            <TabsTrigger value="week">Last 7 Days</TabsTrigger>
-            <TabsTrigger value="month">Last 30 Days</TabsTrigger>
+        <Tabs value={timeRange} onValueChange={(v) => setTimeRange(v as TimeRange)} className="mb-6">
+          <TabsList className="grid w-full max-w-2xl grid-cols-4 bg-gray-200">
+            <TabsTrigger
+              value="week"
+              className="data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=inactive]:text-gray-500 data-[state=inactive]:bg-transparent"
+            >
+              Last 7 Days
+            </TabsTrigger>
+            <TabsTrigger
+              value="month"
+              className="data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=inactive]:text-gray-500 data-[state=inactive]:bg-transparent"
+            >
+              Last 30 Days
+            </TabsTrigger>
+            <TabsTrigger
+              value="quarter"
+              className="data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=inactive]:text-gray-500 data-[state=inactive]:bg-transparent"
+            >
+              Last 90 Days
+            </TabsTrigger>
+            <TabsTrigger
+              value="max"
+              className="data-[state=active]:bg-white data-[state=active]:text-gray-900 data-[state=inactive]:text-gray-500 data-[state=inactive]:bg-transparent"
+            >
+              Max
+            </TabsTrigger>
           </TabsList>
         </Tabs>
 
